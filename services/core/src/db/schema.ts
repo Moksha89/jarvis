@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS messages (
   model TEXT,
   mode TEXT,
   error TEXT,
+  step_json TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
@@ -112,4 +113,42 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_events(time DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_tool ON audit_events(tool_id, time DESC);
+
+CREATE TABLE IF NOT EXISTS saved_tasks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  model TEXT,
+  max_steps INTEGER NOT NULL,
+  schedule_kind TEXT NOT NULL,
+  interval_minutes INTEGER,
+  daily_time TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_saved_tasks_due ON saved_tasks(enabled, next_run_at);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES saved_tasks(id) ON DELETE CASCADE,
+  conversation_id TEXT,
+  status TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error TEXT,
+  steps_used INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, started_at DESC);
 `;
+
+/**
+ * Columns added after the first release. `CREATE TABLE IF NOT EXISTS` leaves
+ * existing databases untouched, so new columns are applied separately.
+ */
+export const COLUMN_MIGRATIONS: readonly { table: string; column: string; definition: string }[] = [
+  { table: 'messages', column: 'step_json', definition: 'TEXT' },
+];

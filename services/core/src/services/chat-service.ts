@@ -1,10 +1,20 @@
-import type { AgentAdapter, ChatMessage, ChatMode, ChatStreamEvent, ModelRuntimeAdapter } from '@jarvis/types';
+import type {
+  AgentAdapter,
+  ChatCompletionMessage,
+  ChatMessage,
+  ChatMode,
+  ChatStreamEvent,
+  ModelRuntimeAdapter,
+  Task,
+} from '@jarvis/types';
+import { TASK_LIMITS } from '@jarvis/types';
 import type { EventBus } from '@jarvis/events';
 import type { ConversationStore } from '../store/conversation-store.js';
+import type { AgentRunner } from './agent-runner.js';
 import type { ModelRouter } from './model-router.js';
 import type { TaskManager } from './task-manager.js';
 
-const SYSTEM_PROMPTS: Record<ChatMode, string> = {
+const SYSTEM_PROMPTS: Record<'ask' | 'plan', string> = {
   ask: 'You are Jarvis, a local assistant running on the user\'s Windows PC. Answer directly and concisely. Use Markdown for structure and fenced code blocks with a language tag for code.',
   plan: 'You are Jarvis in Plan mode. Do not perform actions. Produce a short numbered plan, then list the risks and what you would need permission to touch. Keep it under 200 words unless asked otherwise.',
 };
@@ -17,11 +27,15 @@ export interface SendOptions {
   /** Regenerate: drop this message and everything after it before answering. */
   retryFromMessageId?: string;
   signal?: AbortSignal;
+  /** Agent mode only: how many tool steps the run may take. */
+  maxSteps?: number;
+  /** Agent mode only: no one is watching, so pending approvals fail closed. */
+  unattended?: boolean;
 }
 
 /**
- * Owns conversation state and streaming. It talks to the agent adapter when one is
- * usable and to the model runtime otherwise, so callers never choose a backend.
+ * Owns conversation state and streaming. Ask and Plan answer from the model alone;
+ * Agent hands the turn to `AgentRunner`, which drives tools through the executor.
  */
 export class ChatService {
   constructor(
@@ -30,6 +44,7 @@ export class ChatService {
     private readonly runtime: ModelRuntimeAdapter,
     private readonly tasks: TaskManager,
     private readonly bus: EventBus,
+    private readonly agentRunner: AgentRunner,
     private readonly agent?: AgentAdapter,
   ) {}
 
@@ -53,14 +68,14 @@ export class ChatService {
 
     const task = this.tasks.create({
       title: options.content.slice(0, 80),
-      kind: 'chat',
+      kind: options.mode === 'agent' ? 'agent' : 'chat',
       conversationId: options.conversationId,
       detail: `${options.mode} mode`,
     });
 
-    let route: { model: string };
+    let model: string;
     try {
-      route = await this.router.route({ requested: options.model ?? conversation.model, mode: options.mode });
+      model = (await this.router.route({ requested: options.model ?? conversation.model, mode: options.mode })).model;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.tasks.update(task.id, { status: 'failed', error: message });
@@ -75,15 +90,20 @@ export class ChatService {
       return;
     }
 
+    if (options.mode === 'agent') {
+      yield* this.runAgent(options, model, task);
+      return;
+    }
+
     const assistant = this.conversations.addMessage({
       conversationId: options.conversationId,
       role: 'assistant',
       content: '',
-      model: route.model,
+      model,
       mode: options.mode,
     });
     this.tasks.update(task.id, { status: 'running' });
-    yield this.emit({ type: 'start', messageId: assistant.id, model: route.model });
+    yield this.emit({ type: 'start', messageId: assistant.id, model });
 
     const history = this.conversations
       .listMessages(options.conversationId)
@@ -91,7 +111,7 @@ export class ChatService {
 
     let assembled = '';
     try {
-      for await (const text of this.streamText(history, options, route.model)) {
+      for await (const text of this.streamText(history, options, model)) {
         assembled += text;
         yield this.emit({ type: 'delta', messageId: assistant.id, text });
       }
@@ -99,15 +119,93 @@ export class ChatService {
       this.tasks.update(task.id, { status: 'succeeded' });
       yield this.emit({ type: 'done', messageId: assistant.id, content: assembled });
     } catch (error) {
-      const message =
-        error instanceof Error && error.name === 'AbortError'
-          ? 'Generation stopped.'
-          : error instanceof Error
-            ? error.message
-            : String(error);
+      const message = toMessage(error);
       this.conversations.updateMessage(assistant.id, { content: assembled, error: message });
       this.tasks.update(task.id, { status: assembled ? 'cancelled' : 'failed', error: message });
       yield this.emit({ type: 'error', messageId: assistant.id, error: message });
+    }
+  }
+
+  /**
+   * Agent turns write the tool trail to the conversation as they go, then store the
+   * final answer last so the transcript reads in the order the work happened.
+   */
+  private async *runAgent(options: SendOptions, model: string, task: Task): AsyncGenerator<ChatStreamEvent> {
+    const messageId = crypto.randomUUID();
+    this.tasks.update(task.id, { status: 'running' });
+    yield this.emit({ type: 'start', messageId, model });
+
+    const history = this.conversations
+      .listMessages(options.conversationId)
+      .filter((message) => message.content.length > 0)
+      .map(toCompletionMessage);
+    const maxSteps = clampSteps(options.maxSteps ?? TASK_LIMITS.maxSteps);
+
+    try {
+      const run = this.agentRunner.run({
+        conversationId: options.conversationId,
+        model,
+        history,
+        maxSteps,
+        messageId,
+        taskId: task.id,
+        signal: options.signal,
+        unattended: options.unattended,
+      });
+
+      for (;;) {
+        const next = await run.next();
+        if (next.done) {
+          this.conversations.addMessage({
+            id: messageId,
+            conversationId: options.conversationId,
+            role: 'assistant',
+            content: next.value.content,
+            model,
+            mode: 'agent',
+          });
+          this.tasks.update(task.id, {
+            status: 'succeeded',
+            detail: `agent mode · ${next.value.steps.length} tool ${next.value.steps.length === 1 ? 'call' : 'calls'}`,
+          });
+          yield this.emit({ type: 'done', messageId, content: next.value.content });
+          return;
+        }
+
+        const event = next.value;
+        if (event.type === 'tool-result') {
+          this.conversations.addMessage({
+            conversationId: options.conversationId,
+            role: 'tool',
+            content: event.summary,
+            mode: 'agent',
+            step: {
+              toolId: event.toolId,
+              callId: event.callId,
+              ok: event.ok,
+              summary: event.summary,
+              preview: event.preview,
+            },
+          });
+        } else if (event.type === 'awaiting-approval') {
+          this.tasks.update(task.id, { status: 'awaiting-approval', detail: event.summary });
+        }
+        yield this.emit(event);
+      }
+    } catch (error) {
+      const message = toMessage(error);
+      this.conversations.addMessage({
+        id: messageId,
+        conversationId: options.conversationId,
+        role: 'assistant',
+        content: '',
+        model,
+        mode: 'agent',
+        error: message,
+      });
+      const stopped = message === 'Generation stopped.';
+      this.tasks.update(task.id, { status: stopped ? 'cancelled' : 'failed', error: message });
+      yield this.emit({ type: 'error', messageId, error: message });
     }
   }
 
@@ -116,12 +214,10 @@ export class ChatService {
     options: SendOptions,
     model: string,
   ): AsyncGenerator<string> {
-    const messages = [
-      { role: 'system' as const, content: SYSTEM_PROMPTS[options.mode] },
-      ...history.map((message) => ({
-        role: message.role === 'system' ? ('system' as const) : (message.role as 'user' | 'assistant'),
-        content: message.content,
-      })),
+    const mode = options.mode === 'plan' ? 'plan' : 'ask';
+    const messages: ChatCompletionMessage[] = [
+      { role: 'system', content: SYSTEM_PROMPTS[mode] },
+      ...history.map(toCompletionMessage),
     ];
 
     if (this.agent && (await this.isAgentUsable())) {
@@ -148,4 +244,23 @@ export class ChatService {
     this.bus.emit('chat.stream', event);
     return event;
   }
+}
+
+function toCompletionMessage(message: ChatMessage): ChatCompletionMessage {
+  if (message.role === 'tool') {
+    // Replay a past tool step as narration; the original call ids mean nothing now.
+    return { role: 'assistant', content: `[tool ${message.step?.toolId ?? 'call'}] ${message.content}` };
+  }
+  return { role: message.role, content: message.content };
+}
+
+function clampSteps(steps: number): number {
+  return Math.max(1, Math.min(TASK_LIMITS.maxSteps, Math.trunc(steps)));
+}
+
+function toMessage(error: unknown): string {
+  if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+    return 'Generation stopped.';
+  }
+  return error instanceof Error ? error.message : String(error);
 }

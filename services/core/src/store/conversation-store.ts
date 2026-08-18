@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatMode, Conversation, MessageRole } from '@jarvis/types';
+import type { ChatMessage, ChatMode, Conversation, MessageRole, ToolStepRecord } from '@jarvis/types';
 import type { JarvisDatabase } from '../db/database.js';
 
 interface ConversationRow {
@@ -18,6 +18,7 @@ interface MessageRow {
   model: string | null;
   mode: string | null;
   error: string | null;
+  step_json: string | null;
   created_at: string;
 }
 
@@ -67,6 +68,7 @@ export class ConversationStore {
     model?: string;
     mode?: ChatMode;
     error?: string;
+    step?: ToolStepRecord;
     id?: string;
   }): ChatMessage {
     const now = new Date().toISOString();
@@ -78,12 +80,13 @@ export class ConversationStore {
       model: message.model,
       mode: message.mode,
       error: message.error,
+      step: message.step,
       createdAt: now,
     };
     this.db
       .prepare(
-        `INSERT INTO messages (id, conversation_id, role, content, model, mode, error, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, conversation_id, role, content, model, mode, error, step_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -93,6 +96,7 @@ export class ConversationStore {
         record.model ?? null,
         record.mode ?? null,
         record.error ?? null,
+        record.step ? JSON.stringify(record.step) : null,
         now,
       );
     this.db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, message.conversationId);
@@ -119,8 +123,10 @@ export class ConversationStore {
   }
 
   listMessages(conversationId: string): ChatMessage[] {
+    // An agent run writes several rows inside the same millisecond, so rowid breaks
+    // ties and keeps the transcript in insertion order.
     const rows = this.db
-      .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC')
+      .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC')
       .all(conversationId) as MessageRow[];
     return rows.map((row) => ({
       id: row.id,
@@ -130,6 +136,7 @@ export class ConversationStore {
       model: row.model ?? undefined,
       mode: (row.mode as ChatMode | null) ?? undefined,
       error: row.error ?? undefined,
+      step: row.step_json ? (JSON.parse(row.step_json) as ToolStepRecord) : undefined,
       createdAt: row.created_at,
     }));
   }

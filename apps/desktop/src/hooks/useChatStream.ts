@@ -4,25 +4,42 @@ import type { ChatMode } from '@jarvis/types';
 import { coreClient } from '../core-client.js';
 import { queryKeys } from '../queries.js';
 
+export interface AgentActivity {
+  callId: string;
+  toolId: string;
+  summary: string;
+  state: 'running' | 'awaiting-approval' | 'done' | 'failed';
+}
+
 export interface StreamingState {
   /** Text accumulated for the in-flight assistant message. */
   text: string;
   busy: boolean;
   error: string | null;
+  /** Agent mode only: which step of the budget is running. */
+  step: { current: number; max: number } | null;
+  /** Agent mode only: the tools this turn has reached for, newest last. */
+  activity: AgentActivity[];
 }
+
+const IDLE: StreamingState = { text: '', busy: false, error: null, step: null, activity: [] };
 
 export function useChatStream(conversationId: string | null) {
   const queryClient = useQueryClient();
   const abortRef = useRef<AbortController | null>(null);
-  const [state, setState] = useState<StreamingState>({ text: '', busy: false, error: null });
+  const [state, setState] = useState<StreamingState>(IDLE);
 
   const send = useCallback(
-    async (content: string, mode: ChatMode, options?: { retryFromMessageId?: string; model?: string }) => {
+    async (
+      content: string,
+      mode: ChatMode,
+      options?: { retryFromMessageId?: string; model?: string; maxSteps?: number },
+    ) => {
       if (!conversationId) return;
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-      setState({ text: '', busy: true, error: null });
+      setState({ ...IDLE, busy: true });
 
       try {
         const stream = coreClient.sendChat(
@@ -32,21 +49,48 @@ export function useChatStream(conversationId: string | null) {
             mode,
             model: options?.model,
             retryFromMessageId: options?.retryFromMessageId,
+            maxSteps: options?.maxSteps,
           },
           controller.signal,
         );
         for await (const event of stream) {
-          if (event.type === 'delta') {
-            setState((prev) => ({ ...prev, text: prev.text + event.text }));
-          } else if (event.type === 'error') {
-            setState((prev) => ({ ...prev, error: event.error }));
+          switch (event.type) {
+            case 'delta':
+              setState((prev) => ({ ...prev, text: prev.text + event.text }));
+              break;
+            case 'step':
+              setState((prev) => ({ ...prev, step: { current: event.step, max: event.maxSteps } }));
+              break;
+            case 'tool-call':
+              setState((prev) => ({
+                ...prev,
+                activity: [
+                  ...prev.activity,
+                  { callId: event.callId, toolId: event.toolId, summary: event.summary, state: 'running' },
+                ],
+              }));
+              break;
+            case 'awaiting-approval':
+              setState((prev) => ({ ...prev, activity: patch(prev.activity, event.callId, 'awaiting-approval') }));
+              break;
+            case 'tool-result':
+              setState((prev) => ({
+                ...prev,
+                activity: patch(prev.activity, event.callId, event.ok ? 'done' : 'failed', event.summary),
+              }));
+              break;
+            case 'error':
+              setState((prev) => ({ ...prev, error: event.error }));
+              break;
+            default:
+              break;
           }
         }
-        setState({ text: '', busy: false, error: null });
+        setState(IDLE);
       } catch (error) {
         // Aborting is a user action ("Stop"), not a failure.
         const aborted = controller.signal.aborted;
-        setState({ text: '', busy: false, error: aborted ? null : (error as Error).message });
+        setState({ ...IDLE, error: aborted ? null : (error as Error).message });
       } finally {
         await queryClient.invalidateQueries({ queryKey: queryKeys.messages(conversationId) });
         void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
@@ -62,4 +106,15 @@ export function useChatStream(conversationId: string | null) {
   }, []);
 
   return { ...state, send, cancel };
+}
+
+function patch(
+  activity: readonly AgentActivity[],
+  callId: string,
+  state: AgentActivity['state'],
+  summary?: string,
+): AgentActivity[] {
+  return activity.map((entry) =>
+    entry.callId === callId ? { ...entry, state, summary: summary ?? entry.summary } : entry,
+  );
 }

@@ -106,7 +106,7 @@ export class AuditStore {
     }
     const limit = Math.min(query.limit ?? 200, 1_000);
     const offset = query.offset ?? 0;
-    const sql = `SELECT * FROM audit_events ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY time DESC LIMIT ? OFFSET ?`;
+    const sql = `SELECT * FROM audit_events ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY time DESC, rowid DESC LIMIT ? OFFSET ?`;
     const rows = this.db.prepare(sql).all(...params, limit, offset) as AuditRow[];
     return rows.map(toEvent);
   }

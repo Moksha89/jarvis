@@ -1,4 +1,11 @@
-import type { ChatMode, PathScope, PermissionProfileId, PermissionRule, RiskLevel } from '@jarvis/types';
+import type {
+  ChatMode,
+  PathScope,
+  PermissionProfileId,
+  PermissionRule,
+  RiskLevel,
+  SavedTaskInput,
+} from '@jarvis/types';
 
 export const CORE_DEFAULT_PORT = 47821;
 
@@ -8,6 +15,14 @@ export interface SendChatBody {
   mode: ChatMode;
   model?: string;
   retryFromMessageId?: string;
+  /** Agent mode only: tool-step budget for this turn. */
+  maxSteps?: number;
+}
+
+export type SavedTaskBody = SavedTaskInput;
+
+export interface SetTaskEnabledBody {
+  enabled: boolean;
 }
 
 export interface CallToolBody {

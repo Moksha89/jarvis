@@ -2,11 +2,14 @@ import { execFile } from 'node:child_process';
 import { platform } from 'node:process';
 import { promisify } from 'node:util';
 import type {
+  ChatCompletionMessage,
   ChatCompletionRequest,
   ModelInfo,
+  ModelPullProgress,
   ModelRuntimeAdapter,
   ModelRuntimeInfo,
   ModelStreamChunk,
+  ModelToolCall,
 } from '@jarvis/types';
 import { parseSseData } from './sse.js';
 
@@ -27,6 +30,29 @@ interface OllamaTag {
 
 interface OllamaChatChoiceDelta {
   choices?: { delta?: { content?: string }; finish_reason?: string | null }[];
+}
+
+interface OllamaRunningModel {
+  name: string;
+  size_vram?: number;
+  expires_at?: string;
+}
+
+interface OllamaNativeChunk {
+  message?: {
+    content?: string;
+    tool_calls?: { function?: { name?: string; arguments?: unknown } }[];
+  };
+  done?: boolean;
+  done_reason?: string;
+  error?: string;
+}
+
+interface OllamaPullChunk {
+  status?: string;
+  completed?: number;
+  total?: number;
+  error?: string;
 }
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
@@ -86,19 +112,69 @@ export class OllamaAdapter implements ModelRuntimeAdapter {
   async listModels(): Promise<ModelInfo[]> {
     const [tags, running] = await Promise.all([
       this.fetchJson<{ models?: OllamaTag[] }>('/api/tags'),
-      this.fetchJson<{ models?: { name: string }[] }>('/api/ps').catch(() => ({ models: [] })),
+      this.fetchJson<{ models?: OllamaRunningModel[] }>('/api/ps').catch(() => ({ models: [] })),
     ]);
-    const loaded = new Set((running.models ?? []).map((model) => model.name));
-    return (tags.models ?? []).map((model) => ({
-      id: model.name,
-      name: model.name,
-      parameterSize: model.details?.parameter_size,
-      quantization: model.details?.quantization_level,
-      family: model.details?.family,
-      sizeBytes: model.size,
-      modifiedAt: model.modified_at,
-      loaded: loaded.has(model.name),
-    }));
+    const loaded = new Map((running.models ?? []).map((model) => [model.name, model]));
+    return (tags.models ?? []).map((model) => {
+      const live = loaded.get(model.name);
+      return {
+        id: model.name,
+        name: model.name,
+        parameterSize: model.details?.parameter_size,
+        quantization: model.details?.quantization_level,
+        family: model.details?.family,
+        sizeBytes: model.size,
+        modifiedAt: model.modified_at,
+        loaded: live !== undefined,
+        vramBytes: live?.size_vram,
+        expiresAt: live?.expires_at,
+      };
+    });
+  }
+
+  /** Streams Ollama's own pull progress; the caller decides how to show it. */
+  async *pullModel(model: string, signal?: AbortSignal): AsyncIterable<ModelPullProgress> {
+    const response = await fetch(`${this.endpoint}/api/pull`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, stream: true }),
+      signal,
+    });
+    if (!response.ok || !response.body) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Ollama could not pull ${model} (${response.status}): ${detail.slice(0, 300)}`);
+    }
+
+    for await (const line of readNdjson<OllamaPullChunk>(response.body)) {
+      if (line.error) throw new Error(line.error);
+      const status = line.status ?? 'pulling';
+      const done = status === 'success';
+      yield {
+        status,
+        completedBytes: line.completed,
+        totalBytes: line.total,
+        percent:
+          line.total && line.total > 0 && line.completed !== undefined
+            ? Math.round((line.completed / line.total) * 100)
+            : undefined,
+        done,
+      };
+      if (done) return;
+    }
+    yield { status: 'success', done: true };
+  }
+
+  async deleteModel(model: string): Promise<void> {
+    const response = await fetch(`${this.endpoint}/api/delete`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Ollama could not delete ${model} (${response.status}): ${detail.slice(0, 300)}`);
+    }
   }
 
   async loadModel(model: string): Promise<void> {
@@ -111,6 +187,13 @@ export class OllamaAdapter implements ModelRuntimeAdapter {
   }
 
   async *streamChat(request: ChatCompletionRequest, signal?: AbortSignal): AsyncIterable<ModelStreamChunk> {
+    // Tool calling needs Ollama's native endpoint: the OpenAI-compatible one does
+    // not stream partial tool calls back.
+    if (request.tools?.length) {
+      yield* this.streamNativeChat(request, signal);
+      return;
+    }
+
     const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -151,6 +234,50 @@ export class OllamaAdapter implements ModelRuntimeAdapter {
     yield { type: 'done' };
   }
 
+  private async *streamNativeChat(
+    request: ChatCompletionRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<ModelStreamChunk> {
+    const response = await fetch(`${this.endpoint}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: request.model,
+        messages: request.messages.map(toNativeMessage),
+        stream: true,
+        tools: request.tools?.map((tool) => ({ type: 'function', function: tool })),
+        options: request.temperature === undefined ? undefined : { temperature: request.temperature },
+      }),
+      signal,
+    });
+
+    if (!response.ok || !response.body) {
+      const detail = await response.text().catch(() => '');
+      const hint = /does not support tools/i.test(detail)
+        ? ' This model has no tool support — switch Chat back to Ask, or pull a tool-capable model such as qwen2.5:7b.'
+        : '';
+      throw new Error(`Ollama chat failed (${response.status}): ${detail.slice(0, 300)}${hint}`);
+    }
+
+    for await (const chunk of readNdjson<OllamaNativeChunk>(response.body)) {
+      if (chunk.error) throw new Error(chunk.error);
+      const text = chunk.message?.content;
+      if (text) yield { type: 'delta', text };
+      const calls = (chunk.message?.tool_calls ?? [])
+        .map((call): ModelToolCall | undefined => {
+          const name = call.function?.name;
+          return name ? { name, arguments: call.function?.arguments ?? {} } : undefined;
+        })
+        .filter((call): call is ModelToolCall => call !== undefined);
+      if (calls.length > 0) yield { type: 'tool-calls', calls };
+      if (chunk.done) {
+        yield { type: 'done', finishReason: chunk.done_reason };
+        return;
+      }
+    }
+    yield { type: 'done' };
+  }
+
   private async isInstalled(): Promise<boolean> {
     const probe = platform === 'win32' ? ['where', ['ollama.exe']] : ['which', ['ollama']];
     try {
@@ -185,4 +312,52 @@ export class OllamaAdapter implements ModelRuntimeAdapter {
 
 function isConnectionRefused(message: string): boolean {
   return /econnrefused|fetch failed|connect|timeout|aborted/i.test(message);
+}
+
+function toNativeMessage(message: ChatCompletionMessage): Record<string, unknown> {
+  const base: Record<string, unknown> = { role: message.role, content: message.content };
+  if (message.toolName) base.tool_name = message.toolName;
+  if (message.toolCalls?.length) {
+    base.tool_calls = message.toolCalls.map((call) => ({
+      function: { name: call.name, arguments: call.arguments },
+    }));
+  }
+  return base;
+}
+
+/** Ollama's native endpoints stream newline-delimited JSON rather than SSE. */
+async function* readNdjson<T>(body: ReadableStream<Uint8Array>): AsyncGenerator<T> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let index = buffer.indexOf('\n');
+      while (index !== -1) {
+        const line = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        if (line) {
+          try {
+            yield JSON.parse(line) as T;
+          } catch {
+            // A partial or non-JSON line is not worth tearing the stream down for.
+          }
+        }
+        index = buffer.indexOf('\n');
+      }
+    }
+    const tail = buffer.trim();
+    if (tail) {
+      try {
+        yield JSON.parse(tail) as T;
+      } catch {
+        // A truncated trailing line is not worth tearing the stream down for.
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }

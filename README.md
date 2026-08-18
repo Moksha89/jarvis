@@ -82,7 +82,18 @@ The UI reads `VITE_JARVIS_CORE_URL` if you moved Core off the default port.
   collapsible left nav. The app renders fully with no model installed; the Home system
   strip states plainly whether Ollama is missing, stopped or ready.
 - **Streamed chat** — Markdown with syntax-highlighted code, copy, retry and regenerate.
-  Modes are **Ask** and **Plan** only.
+  Modes are **Ask**, **Plan** and **Agent**.
+- **Agent mode** — a bounded multi-step loop using Ollama's native function calling. Every
+  tool call goes through `ToolExecutor`, so the permission engine, approvals and audit
+  apply exactly as in chat. Steps, tool calls and pending approvals stream to the UI; the
+  step budget is capped and runs can be cancelled.
+- **Saved tasks and scheduler** — save a prompt and run it manually, every N minutes
+  (minimum 5) or daily at a wall-clock time. Core runs at most two concurrent runs and one
+  run per task, keeps run history with the run's conversation, recovers overdue schedules
+  after a restart, and fails unanswered approvals closed after two minutes so an unattended
+  run cannot hang.
+- **Model management** — list, load, unload, pull (with streamed progress) and delete
+  models, plus VRAM footprint and unload time for loaded ones.
 - **Permission engine** — risk levels 0–4, `locked` and `balanced` profiles, opt-in folder
   scopes, remembered decisions, and a typed confirmation phrase (`I understand`) for
   level 3+. Level 4 is never granted automatically.
@@ -90,9 +101,12 @@ The UI reads `VITE_JARVIS_CORE_URL` if you moved Core off the default port.
   `shell.run/classify` with command classification (`READ_ONLY`, `NORMAL_WRITE`,
   `DESTRUCTIVE`, `SYSTEM`, `DANGEROUS`, `UNKNOWN`). Chained or piped commands are treated
   as `UNKNOWN` and require approval; dangerous commands are refused in code.
-- **Audit** — every attempted tool action writes an immutable row (time, tool, action,
-  target, risk, permission decision + reason, result, reversibility) to SQLite, filterable
-  on the Activity page.
+- **Audit** — every attempted tool action *and every permission change* (profile switch,
+  rule and scope edits) writes an immutable row (time, tool, action, target, risk,
+  permission decision + reason, result, reversibility) to SQLite, filterable on the
+  Activity page.
+- **Durable approvals** — a pending approval is reconstructed from SQLite, so restarting
+  Core no longer orphans it.
 
 ### Permission model at a glance
 
@@ -145,11 +159,8 @@ classify and gate PowerShell correctly (`Get-Date` → READ_ONLY/allow, `Remove-
 DESTRUCTIVE/ask, `format c:` → DANGEROUS/denied by profile). The spike numbers above are
 from that machine.
 
-**Known gap found during that run:** permission mutations (profile switch, rule and scope
-changes) are not written to the audit trail — `AuditStore.append` is only called from
-`ToolExecutor`, so `JarvisCore.setPermissionProfile`/`addPermissionRule`/`addPathScope`
-leave no record. Also, pending approvals live in an in-memory map while the approval row is
-persisted, so restarting Core orphans a pending approval permanently.
+Both gaps found during that run — unaudited permission mutations and pending approvals kept
+only in memory — are now closed and covered by tests.
 
 ## Out of scope for this milestone
 
