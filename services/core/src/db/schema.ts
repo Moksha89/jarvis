@@ -187,7 +187,6 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_lookup ON knowledge_chunks(corpus, model);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document ON knowledge_chunks(document_id);
-CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_message ON knowledge_chunks(message_id);
 `;
 
 /**
@@ -199,3 +198,12 @@ export const COLUMN_MIGRATIONS: readonly { table: string; column: string; defini
   { table: 'messages', column: 'citations_json', definition: 'TEXT' },
   { table: 'knowledge_chunks', column: 'message_id', definition: 'TEXT' },
 ];
+
+/**
+ * Indexes over migrated columns. They run after COLUMN_MIGRATIONS because an
+ * existing database only gains those columns there, and indexing a column that
+ * does not exist yet aborts the whole schema step.
+ */
+export const POST_MIGRATION_SQL = `
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_message ON knowledge_chunks(message_id);
+`;
