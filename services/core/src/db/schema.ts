@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
   corpus TEXT NOT NULL,
   document_id TEXT REFERENCES knowledge_documents(id) ON DELETE CASCADE,
   conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT,
   source TEXT NOT NULL,
   title TEXT NOT NULL,
   ordinal INTEGER NOT NULL,
@@ -186,6 +187,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_lookup ON knowledge_chunks(corpus, model);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document ON knowledge_chunks(document_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_message ON knowledge_chunks(message_id);
 `;
 
 /**
@@ -195,4 +197,5 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document ON knowledge_chunks(doc
 export const COLUMN_MIGRATIONS: readonly { table: string; column: string; definition: string }[] = [
   { table: 'messages', column: 'step_json', definition: 'TEXT' },
   { table: 'messages', column: 'citations_json', definition: 'TEXT' },
+  { table: 'knowledge_chunks', column: 'message_id', definition: 'TEXT' },
 ];

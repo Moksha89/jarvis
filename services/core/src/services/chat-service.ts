@@ -53,7 +53,11 @@ export class ChatService {
 
   async *send(options: SendOptions): AsyncGenerator<ChatStreamEvent> {
     if (options.retryFromMessageId) {
+      // The memory of a discarded answer goes with the answer, so a retry cannot be
+      // quoted back later from what the user threw away.
+      const dropped = this.droppedMessageIds(options.conversationId, options.retryFromMessageId);
       this.conversations.deleteMessagesFrom(options.conversationId, options.retryFromMessageId);
+      this.knowledge?.forgetMessages(dropped);
     }
 
     const conversation = this.conversations.get(options.conversationId);
@@ -126,7 +130,7 @@ export class ChatService {
       }
       this.conversations.updateMessage(assistant.id, { content: assembled });
       this.tasks.update(task.id, { status: 'succeeded' });
-      void this.remember(options, assembled);
+      void this.remember(options, assistant.id, assembled);
       yield this.emit({ type: 'done', messageId: assistant.id, content: assembled });
     } catch (error) {
       const message = toMessage(error);
@@ -186,7 +190,7 @@ export class ChatService {
             mode: 'agent',
             citations: context.citations.length > 0 ? context.citations : undefined,
           });
-          void this.remember(options, next.value.content);
+          void this.remember(options, messageId, next.value.content);
           this.tasks.update(task.id, {
             status: 'succeeded',
             detail: `agent mode · ${next.value.steps.length} tool ${next.value.steps.length === 1 ? 'call' : 'calls'}`,
@@ -247,7 +251,10 @@ export class ChatService {
 
     if (this.agent && (await this.isAgentUsable())) {
       const session = await this.agent.createSession({ model });
-      for await (const event of this.agent.send(session.id, options.content, options.signal)) {
+      // The agent session takes a single prompt, so retrieved passages ride in front of
+      // the question: an answer must never be cited with sources it never saw.
+      const prompt = context ? `${context}\n\n${options.content}` : options.content;
+      for await (const event of this.agent.send(session.id, prompt, options.signal)) {
         if (event.type === 'delta') yield event.text;
         if (event.type === 'error') throw new Error(event.error);
       }
@@ -259,12 +266,21 @@ export class ChatService {
     }
   }
 
+  /** Message ids from the retry point onward, whose memory is about to be invalid. */
+  private droppedMessageIds(conversationId: string, fromMessageId: string): string[] {
+    const messages = this.conversations.listMessages(conversationId);
+    const start = messages.findIndex((message) => message.id === fromMessageId);
+    if (start < 0) return [];
+    return messages.slice(start).map((message) => message.id);
+  }
+
   /** Fire-and-forget: remembering a turn must never fail the answer the user has. */
-  private remember(options: SendOptions, answer: string): Promise<void> {
+  private remember(options: SendOptions, messageId: string, answer: string): Promise<void> {
     if (!this.knowledge || !answer.trim()) return Promise.resolve();
     const conversation = this.conversations.get(options.conversationId);
     return this.knowledge.remember({
       conversationId: options.conversationId,
+      messageId,
       title: conversation?.title ?? 'Conversation',
       question: options.content,
       answer,

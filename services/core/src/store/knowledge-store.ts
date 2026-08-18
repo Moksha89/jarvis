@@ -47,6 +47,8 @@ export interface ChunkInput {
   corpus: KnowledgeCorpus;
   documentId?: string;
   conversationId?: string;
+  /** The assistant message this memory came from, so a regenerated answer replaces it. */
+  messageId?: string;
   /** Where the text came from: an absolute file path, or a conversation title. */
   source: string;
   title: string;
@@ -222,14 +224,15 @@ export class KnowledgeStore {
     this.db
       .prepare(
         `INSERT INTO knowledge_chunks
-           (id, corpus, document_id, conversation_id, source, title, ordinal, text, embedding, dimensions, model, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, corpus, document_id, conversation_id, message_id, source, title, ordinal, text, embedding, dimensions, model, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         chunk.corpus,
         chunk.documentId ?? null,
         chunk.conversationId ?? null,
+        chunk.messageId ?? null,
         chunk.source,
         chunk.title,
         chunk.ordinal,
@@ -304,6 +307,23 @@ export class KnowledgeStore {
   /** Used when a conversation turn is re-remembered, so a retry cannot duplicate it. */
   deleteConversationChunks(conversationId: string): void {
     this.db.prepare("DELETE FROM knowledge_chunks WHERE corpus = 'conversations' AND conversation_id = ?").run(conversationId);
+  }
+
+  /** Drops the memory of specific turns, e.g. the answers a retry threw away. */
+  deleteMessageChunks(messageIds: readonly string[]): void {
+    if (messageIds.length === 0) return;
+    const statement = this.db.prepare('DELETE FROM knowledge_chunks WHERE message_id = ?');
+    this.db.transaction(() => {
+      for (const messageId of messageIds) statement.run(messageId);
+    })();
+  }
+
+  /**
+   * Sources are marked "indexing" in the database while a pass runs, so a crash leaves
+   * that mark behind with no pass to clear it. Nothing is indexing at construction time.
+   */
+  clearStaleIndexingStatus(): void {
+    this.db.prepare("UPDATE knowledge_sources SET status = 'idle' WHERE status = 'indexing'").run();
   }
 }
 
