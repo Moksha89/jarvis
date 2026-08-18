@@ -248,8 +248,12 @@ export class ChatService {
 
 function toCompletionMessage(message: ChatMessage): ChatCompletionMessage {
   if (message.role === 'tool') {
-    // Replay a past tool step as narration; the original call ids mean nothing now.
-    return { role: 'assistant', content: `[tool ${message.step?.toolId ?? 'call'}] ${message.content}` };
+    // Replay a past tool step as narration. Phrased as prose on purpose: a transcript that
+    // looks like tool syntax teaches small models to fake tool traces instead of calling.
+    return {
+      role: 'assistant',
+      content: `Earlier in this conversation I used ${message.step?.toolId ?? 'a tool'} and it reported: ${message.content}`,
+    };
   }
   return { role: message.role, content: message.content };
 }

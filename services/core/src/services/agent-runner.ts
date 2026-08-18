@@ -26,7 +26,11 @@ instead of retrying it.
 
 Work in small steps: call one tool, read its result, then decide the next step. When you
 have what you need, answer in plain language and do not call more tools. Prefer paths the
-user named. Be concise.`;
+user named. Be concise.
+
+Never write out tool calls or tool results as text: they only count when made through the
+tool interface. If you cannot use a tool, say so rather than describing what it would have
+returned, and never invent file names, contents or command output.`;
 
 export interface AgentRunOptions {
   conversationId: string;

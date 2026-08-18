@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import {
   Body1,
+  Button,
   Card,
   Dropdown,
   MessageBar,
@@ -156,6 +157,13 @@ export function ChatPage() {
                 </Option>
               ))}
             </Dropdown>
+            <Button
+              size="small"
+              disabled={stream.busy || createConversation.isPending}
+              onClick={() => createConversation.mutate(chatMode)}
+            >
+              New conversation
+            </Button>
           </div>
         }
       />

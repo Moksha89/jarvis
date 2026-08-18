@@ -24,11 +24,19 @@ import { queryKeys, useModels, useSystemStatus } from '../queries.js';
 
 const useStyles = makeStyles({
   notice: { marginBottom: jarvisSpacing.m },
-  actions: { display: 'flex', gap: jarvisSpacing.xs },
+  actions: { display: 'flex', gap: jarvisSpacing.xs, flexWrap: 'wrap' },
+  scroller: { overflowX: 'auto' },
   pull: { display: 'flex', gap: jarvisSpacing.s, alignItems: 'flex-end', marginBottom: jarvisSpacing.m },
   pullField: { minWidth: '260px' },
   progress: { display: 'flex', flexDirection: 'column', gap: jarvisSpacing.xs, marginBottom: jarvisSpacing.m },
 });
+
+/** A real zero (a CPU-only load reports 0 VRAM) must not read as "unknown". */
+function formatGigabytes(bytes: number | undefined): string {
+  if (bytes === undefined) return '—';
+  if (bytes === 0) return '0 GB';
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
 
 export function ModelsPage() {
   const styles = useStyles();
@@ -47,6 +55,7 @@ export function ModelsPage() {
   const [pullName, setPullName] = useState('');
   const [pull, setPull] = useState<{ model: string; label: string; percent?: number } | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const startPull = async () => {
     const model = pullName.trim();
@@ -108,12 +117,12 @@ export function ModelsPage() {
       {(models.data ?? []).length === 0 ? (
         <Body1>No models found. Pull one above, for example `qwen2.5-coder:7b`.</Body1>
       ) : (
+        <div className={styles.scroller}>
         <Table size="small">
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Model</TableHeaderCell>
-              <TableHeaderCell>Parameters</TableHeaderCell>
-              <TableHeaderCell>Quantization</TableHeaderCell>
+              <TableHeaderCell>Details</TableHeaderCell>
               <TableHeaderCell>Size</TableHeaderCell>
               <TableHeaderCell>VRAM</TableHeaderCell>
               <TableHeaderCell>State</TableHeaderCell>
@@ -124,10 +133,9 @@ export function ModelsPage() {
             {(models.data ?? []).map((model) => (
               <TableRow key={model.id}>
                 <TableCell>{model.name}</TableCell>
-                <TableCell>{model.parameterSize ?? '—'}</TableCell>
-                <TableCell>{model.quantization ?? '—'}</TableCell>
-                <TableCell>{model.sizeBytes ? `${(model.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '—'}</TableCell>
-                <TableCell>{model.vramBytes ? `${(model.vramBytes / 1024 ** 3).toFixed(1)} GB` : '—'}</TableCell>
+                <TableCell>{[model.parameterSize, model.quantization].filter(Boolean).join(' · ') || '—'}</TableCell>
+                <TableCell>{formatGigabytes(model.sizeBytes)}</TableCell>
+                <TableCell>{formatGigabytes(model.vramBytes)}</TableCell>
                 <TableCell>
                   <StatusBadge
                     tone={model.loaded ? 'ok' : 'neutral'}
@@ -151,8 +159,20 @@ export function ModelsPage() {
                     >
                       Unload
                     </Button>
-                    <Button size="small" disabled={remove.isPending} onClick={() => remove.mutate(model.id)}>
-                      Delete
+                    <Button
+                      size="small"
+                      appearance={confirmDelete === model.id ? 'primary' : 'secondary'}
+                      disabled={remove.isPending}
+                      onClick={() => {
+                        if (confirmDelete === model.id) {
+                          remove.mutate(model.id);
+                          setConfirmDelete(null);
+                          return;
+                        }
+                        setConfirmDelete(model.id);
+                      }}
+                    >
+                      {confirmDelete === model.id ? 'Confirm delete' : 'Delete'}
                     </Button>
                   </div>
                 </TableCell>
@@ -160,6 +180,7 @@ export function ModelsPage() {
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
     </>
   );
