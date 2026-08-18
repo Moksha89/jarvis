@@ -97,20 +97,37 @@ export function WorkflowsPage() {
       actions.remove.error ??
       null);
 
-  const setSteps = (next: WorkflowStepInput[]) => {
-    // Positions shift when steps are added, removed or moved, so the raw text is re-derived.
-    setJsonEdits({});
+  /**
+   * Adding, removing or moving a step shifts the positions the edits are keyed by, so they
+   * follow their step instead of being dropped: losing them would revert a step to its last
+   * understood arguments and quietly make an unusable draft savable.
+   */
+  const setSteps = (next: WorkflowStepInput[], moveKey: (position: number) => number | null) => {
+    setJsonEdits((current) =>
+      Object.fromEntries(
+        Object.entries(current).flatMap(([position, edit]) => {
+          const moved = moveKey(Number(position));
+          return moved === null ? [] : [[moved, edit] as const];
+        }),
+      ),
+    );
     setDraft({ ...draft, steps: next });
   };
   const patchStep = (index: number, patch: Partial<WorkflowStepInput>) =>
     setDraft({ ...draft, steps: steps.map((step, position) => (position === index ? { ...step, ...patch } : step)) });
+  const removeStep = (index: number) =>
+    setSteps(
+      steps.filter((_, position) => position !== index),
+      (position) => (position === index ? null : position > index ? position - 1 : position),
+    );
   const move = (index: number, delta: number) => {
     const target = index + delta;
     if (target < 0 || target >= steps.length) return;
     const next = [...steps];
     const [moved] = next.splice(index, 1);
     next.splice(target, 0, moved as WorkflowStepInput);
-    setSteps(next);
+    // Only ever one place at a time, so the two positions simply trade places.
+    setSteps(next, (position) => (position === index ? target : position === target ? index : position));
   };
 
   const reset = () => {
@@ -204,7 +221,7 @@ export function WorkflowsPage() {
                 size="small"
                 appearance="subtle"
                 disabled={steps.length === 1}
-                onClick={() => setSteps(steps.filter((_, position) => position !== index))}
+                onClick={() => removeStep(index)}
               >
                 Remove
               </Button>
@@ -308,7 +325,7 @@ export function WorkflowsPage() {
         <div className={styles.actions}>
           <Button
             disabled={steps.length >= WORKFLOW_LIMITS.maxSteps}
-            onClick={() => setSteps([...steps, { ...EMPTY_STEP }])}
+            onClick={() => setSteps([...steps, { ...EMPTY_STEP }], (position) => position)}
           >
             Add step
           </Button>
