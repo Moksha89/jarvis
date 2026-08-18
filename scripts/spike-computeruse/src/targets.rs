@@ -9,8 +9,9 @@ pub struct Target {
     pub launch: &'static str,
     /// Window classes that identify the app's main window.
     pub window_classes: &'static [&'static str],
-    /// Substring the window title must contain (case-insensitive), if any.
-    pub title_contains: Option<&'static str>,
+    /// Substrings the window title may contain (case-insensitive); any match wins.
+    /// Empty means "any non-empty title".
+    pub title_contains: &'static [&'static str],
     /// Whether the spike is allowed to type into the app when `--allow-input` is set.
     pub input_probe: bool,
 }
@@ -21,7 +22,7 @@ pub const TARGETS: &[Target] = &[
         label: "File Explorer",
         launch: "explorer.exe",
         window_classes: &["CabinetWClass", "ExplorerWClass"],
-        title_contains: None,
+        title_contains: &[],
         input_probe: false,
     },
     Target {
@@ -29,7 +30,7 @@ pub const TARGETS: &[Target] = &[
         label: "Windows Settings",
         launch: "ms-settings:",
         window_classes: &["ApplicationFrameWindow", "Windows.UI.Core.CoreWindow"],
-        title_contains: Some("settings"),
+        title_contains: &["settings"],
         input_probe: false,
     },
     Target {
@@ -37,7 +38,7 @@ pub const TARGETS: &[Target] = &[
         label: "Notepad",
         launch: "notepad.exe",
         window_classes: &["Notepad", "ApplicationFrameWindow"],
-        title_contains: None,
+        title_contains: &["notepad"],
         input_probe: true,
     },
     Target {
@@ -45,7 +46,7 @@ pub const TARGETS: &[Target] = &[
         label: "Visual Studio Code",
         launch: "code",
         window_classes: &["Chrome_WidgetWin_1"],
-        title_contains: Some("visual studio code"),
+        title_contains: &["visual studio code"],
         input_probe: false,
     },
     Target {
@@ -53,7 +54,7 @@ pub const TARGETS: &[Target] = &[
         label: "Chrome or Edge",
         launch: "msedge",
         window_classes: &["Chrome_WidgetWin_1"],
-        title_contains: Some("edge"),
+        title_contains: &["edge", "chrome"],
         input_probe: false,
     },
 ];

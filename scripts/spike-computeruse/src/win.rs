@@ -32,6 +32,15 @@ struct Candidate {
     title: String,
 }
 
+/// Packaged apps publish their `ApplicationFrameWindow` before it is laid out, so a
+/// window smaller than this is a placeholder rather than the real UI.
+const MIN_WINDOW_WIDTH: i32 = 240;
+const MIN_WINDOW_HEIGHT: i32 = 180;
+
+/// How long to keep re-walking a subtree that only exposes its root element.
+const UIA_SETTLE_ATTEMPTS: u32 = 8;
+const UIA_SETTLE_INTERVAL: Duration = Duration::from_millis(500);
+
 /// COM must be initialised once per thread before any UIA call.
 pub fn init_com() -> Result<(), String> {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
@@ -70,11 +79,16 @@ pub fn wait_for_window(target: &Target, timeout: Duration) -> Option<(HWND, Stri
                 .window_classes
                 .iter()
                 .any(|expected| candidate.class.eq_ignore_ascii_case(expected));
-            let title_match = match target.title_contains {
-                Some(needle) => candidate.title.to_lowercase().contains(needle),
-                None => !candidate.title.is_empty(),
+            let title = candidate.title.to_lowercase();
+            let title_match = if target.title_contains.is_empty() {
+                !candidate.title.is_empty()
+            } else {
+                target
+                    .title_contains
+                    .iter()
+                    .any(|needle| title.contains(needle))
             };
-            if class_match && title_match {
+            if class_match && title_match && is_laid_out(candidate.hwnd) {
                 return Some((
                     candidate.hwnd,
                     candidate.class.clone(),
@@ -88,6 +102,17 @@ pub fn wait_for_window(target: &Target, timeout: Duration) -> Option<(HWND, Stri
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+/// True once the window is big enough to be the app's real UI.
+fn is_laid_out(hwnd: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return false;
+    }
+    rect.right - rect.left >= MIN_WINDOW_WIDTH && rect.bottom - rect.top >= MIN_WINDOW_HEIGHT
 }
 
 fn bstr_to_string(value: windows::core::Result<BSTR>) -> String {
@@ -113,7 +138,6 @@ pub fn probe_uia(hwnd: HWND, finding: &mut Finding, allow_input: bool, input_pro
     };
     finding.uia_root_name = bstr_to_string(unsafe { root.CurrentName() });
 
-    let started = Instant::now();
     let condition = match unsafe { automation.CreateTrueCondition() } {
         Ok(condition) => condition,
         Err(error) => {
@@ -121,14 +145,38 @@ pub fn probe_uia(hwnd: HWND, finding: &mut Finding, allow_input: bool, input_pro
             return;
         }
     };
-    let elements = match unsafe { root.FindAll(TreeScope_Subtree, &condition) } {
-        Ok(elements) => elements,
-        Err(error) => {
-            finding.errors.push(format!("FindAll(subtree) failed: {error}"));
-            return;
+
+    // A freshly shown window - and any Chromium app, which only builds its tree once an
+    // assistive client attaches - reports just its root element on the first walk.
+    let mut started = Instant::now();
+    let mut elements = None;
+    let mut count = 0;
+    for attempt in 0..UIA_SETTLE_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(UIA_SETTLE_INTERVAL);
+            started = Instant::now();
         }
-    };
-    let count = unsafe { elements.Length() }.unwrap_or(0);
+        match unsafe { root.FindAll(TreeScope_Subtree, &condition) } {
+            Ok(found) => {
+                count = unsafe { found.Length() }.unwrap_or(0);
+                elements = Some(found);
+            }
+            Err(error) => {
+                finding.errors.push(format!("FindAll(subtree) failed: {error}"));
+                return;
+            }
+        }
+        if count > 1 {
+            if attempt > 0 {
+                finding.notes.push(format!(
+                    "Subtree only exposed its root until walk {}; the tree builds lazily.",
+                    attempt + 1
+                ));
+            }
+            break;
+        }
+    }
+    let Some(elements) = elements else { return };
     finding.subtree_elements = count.max(0) as usize;
 
     let mut first_editable: Option<IUIAutomationElement> = None;
@@ -156,7 +204,13 @@ pub fn probe_uia(hwnd: HWND, finding: &mut Finding, allow_input: bool, input_pro
     }
     finding.tree_walk_ms = started.elapsed().as_millis();
 
-    if !allow_input || !input_probe {
+    if !input_probe {
+        finding
+            .notes
+            .push("Write probe not attempted: this app is inspection-only.".into());
+        return;
+    }
+    if !allow_input {
         finding
             .notes
             .push("Write probe skipped. Re-run with --allow-input to attempt a ValuePattern write.".into());
@@ -293,9 +347,15 @@ fn write_bmp(path: &Path, width: u32, height: u32, bgra: &[u8]) -> Result<(), St
 
 /// Launches the target through the shell so URIs such as `ms-settings:` work.
 pub fn launch(command: &str) -> Result<(), String> {
-    use std::process::Command;
+    use std::process::{Command, Stdio};
+
+    // Detached from our stdio: an app that never exits must not hold the spike's
+    // pipes open, which otherwise makes the caller's shell hang after the report.
     Command::new("cmd")
         .args(["/C", "start", "", command])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
