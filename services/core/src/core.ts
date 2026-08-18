@@ -21,6 +21,8 @@ import type {
   PathScope,
   PermissionProfileId,
   PermissionRule,
+  Plan,
+  PlanRunStart,
   ResourceSnapshot,
   SavedTask,
   SavedTaskInput,
@@ -32,6 +34,7 @@ import type {
   WorkflowInput,
   WorkflowRun,
 } from '@jarvis/types';
+import { PLAN_LIMITS } from '@jarvis/types';
 import { EventBus } from '@jarvis/events';
 import { PermissionEngine } from '@jarvis/permissions';
 import {
@@ -59,6 +62,7 @@ import { KnowledgeService } from './services/knowledge-service.js';
 import { McpManager, type McpConnect } from './services/mcp-manager.js';
 import { createKnowledgeSearchTool } from './services/knowledge-tool.js';
 import { ModelRouter } from './services/model-router.js';
+import { Planner } from './services/planner.js';
 import { TaskManager } from './services/task-manager.js';
 import { TaskScheduler } from './services/task-scheduler.js';
 import { ToolExecutor, type ApproveOptions, type ToolCallOptions } from './services/tool-executor.js';
@@ -117,6 +121,8 @@ export class JarvisCore {
   private readonly mcp: McpManager;
   private readonly workflowStore: WorkflowStore;
   private readonly workflows: WorkflowRunner;
+  private readonly router: ModelRouter;
+  private readonly planner: Planner;
   private readonly startedAt = Date.now();
 
   constructor(options: JarvisCoreOptions = {}) {
@@ -162,6 +168,8 @@ export class JarvisCore {
     });
     this.registry.register(createKnowledgeSearchTool(this.knowledge));
     const router = new ModelRouter(this.runtime, () => this.settingsStore.getAll().defaultModel);
+    this.router = router;
+    this.planner = new Planner({ runtime: this.runtime, registry: this.registry });
 
     // Qwen Code is opt-in: when it cannot be reached, the stub keeps the same
     // interface and routes chat through the model runtime instead.
@@ -420,6 +428,49 @@ export class JarvisCore {
 
   runWorkflow(id: string, input?: string): WorkflowRun {
     return this.workflows.runNow(id, input);
+  }
+
+  // ---------------------------------------------------------------- planning
+
+  /**
+   * Works out what to do about something the user asked for, without doing any of it
+   * yet. The steps come back for review; nothing has touched the machine at this point.
+   */
+  async planGoal(goal: string, model?: string): Promise<Plan> {
+    const route = await this.router.route({ requested: model, mode: 'agent' });
+    return await this.planner.plan(goal, route.model);
+  }
+
+  /**
+   * Runs a plan. It is saved as a workflow first, so the run has somewhere to keep its
+   * trail and the user can open, edit or re-run the same steps afterwards. Every step
+   * still goes through the permission gate, so planning grants no extra power.
+   */
+  runPlan(plan: Plan): PlanRunStart {
+    // The plan may have been edited on its way back here, so it is trusted no further
+    // than a hand-written workflow: `create` validates every step before anything runs.
+    const goal = plan.goal.trim().slice(0, PLAN_LIMITS.maxGoalChars);
+    if (!goal) throw new Error('Tell Jarvis what you want done.');
+    if (plan.steps.length > PLAN_LIMITS.maxSteps) {
+      throw new Error(`A plan runs at most ${PLAN_LIMITS.maxSteps} steps.`);
+    }
+    this.workflowStore.prunePlans(PLAN_LIMITS.maxKept - 1);
+    const workflow = this.workflowStore.create(
+      {
+        name: plan.summary.trim().slice(0, 120) || goal.slice(0, 120),
+        description: goal,
+        steps: plan.steps,
+        model: plan.model,
+      },
+      { source: 'planner', goal },
+    );
+    this.bus.emit('workflow.changed', workflow);
+    return { plan, workflowId: workflow.id, run: this.workflows.runNow(workflow.id, goal) };
+  }
+
+  /** Plan and act in one go: what the user gets from typing a sentence and pressing go. */
+  async doGoal(goal: string, model?: string): Promise<PlanRunStart> {
+    return this.runPlan(await this.planGoal(goal, model));
   }
 
   cancelWorkflowRun(runId: string): WorkflowRun {

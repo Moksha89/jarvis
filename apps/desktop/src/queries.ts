@@ -12,6 +12,7 @@ import type {
   KnowledgeIndexProgress,
   McpServerInput,
   PermissionProfileId,
+  Plan,
   SavedTaskInput,
   ToolCallRecord,
   WorkflowInput,
@@ -140,6 +141,23 @@ export function useWorkflowActions() {
   const cancelRun = useMutation({ mutationFn: (runId: string) => coreClient.cancelWorkflowRun(runId), onSuccess: invalidate });
 
   return { create, update, setEnabled, remove, runNow, cancelRun };
+}
+
+/**
+ * Planning and running a plan. Planning changes nothing, so only running refreshes the
+ * workflow lists: a plan is saved as a workflow when it starts.
+ */
+export function usePlanActions() {
+  const queryClient = useQueryClient();
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRuns });
+  };
+
+  const propose = useMutation({ mutationFn: (goal: string) => coreClient.planGoal(goal) });
+  const run = useMutation({ mutationFn: (plan: Plan) => coreClient.runPlan(plan), onSuccess: invalidate });
+
+  return { propose, run };
 }
 
 export function useTools() {

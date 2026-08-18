@@ -19,6 +19,8 @@ import {
   type SetSkillServerEnabledBody,
   type SetTaskEnabledBody,
   type SetWorkflowEnabledBody,
+  type PlanBody,
+  type RunPlanBody,
   type RunWorkflowBody,
   type WorkflowBody,
 } from '../client/contract.js';
@@ -414,6 +416,21 @@ function buildRouter(core: JarvisCore): Router {
   router.post('/api/workflows/runs/:id/cancel', (ctx) =>
     ctx.send(200, core.cancelWorkflowRun(ctx.params.id as string)),
   );
+
+  // Planning: `/plan` only proposes steps, `/plan/run` runs an approved or edited plan,
+  // and `/do` is both in one request for the plain "just do this" path.
+  router.post('/api/plan', async (ctx) => {
+    const body = await ctx.json<PlanBody>();
+    ctx.send(200, await core.planGoal(body.goal ?? '', body.model));
+  });
+  router.post('/api/plan/run', async (ctx) => {
+    const body = await ctx.json<RunPlanBody>();
+    ctx.send(200, core.runPlan(body));
+  });
+  router.post('/api/do', async (ctx) => {
+    const body = await ctx.json<PlanBody>();
+    ctx.send(200, await core.doGoal(body.goal ?? '', body.model));
+  });
 
   router.get('/api/audit', (ctx) => ctx.send(200, core.queryAudit(parseAuditQuery(ctx))));
 

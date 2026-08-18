@@ -1,6 +1,7 @@
 import type {
   Workflow,
   WorkflowInput,
+  WorkflowSource,
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowStep,
@@ -17,6 +18,8 @@ interface WorkflowRow {
   steps_json: string;
   model: string | null;
   enabled: number;
+  source: string;
+  goal: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -37,7 +40,7 @@ interface WorkflowRunRow {
 export class WorkflowStore {
   constructor(private readonly db: JarvisDatabase) {}
 
-  create(input: WorkflowInput): Workflow {
+  create(input: WorkflowInput, origin: { source?: WorkflowSource; goal?: string } = {}): Workflow {
     const count = this.db.prepare('SELECT COUNT(*) AS n FROM workflows').get() as { n: number };
     if (count.n >= WORKFLOW_LIMITS.maxWorkflows) {
       throw new Error(`Jarvis keeps at most ${WORKFLOW_LIMITS.maxWorkflows} workflows. Delete one first.`);
@@ -47,8 +50,8 @@ export class WorkflowStore {
     const id = crypto.randomUUID();
     this.db
       .prepare(
-        `INSERT INTO workflows (id, name, description, steps_json, model, enabled, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO workflows (id, name, description, steps_json, model, enabled, source, goal, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -57,10 +60,30 @@ export class WorkflowStore {
         JSON.stringify(validated.steps),
         validated.model ?? null,
         input.enabled === false ? 0 : 1,
+        origin.source ?? 'user',
+        origin.goal ?? null,
         now,
         now,
       );
     return this.require(id);
+  }
+
+  /**
+   * Drops the oldest plans Jarvis saved for itself, keeping `keep` of them. Only
+   * planned recipes are considered, so a recipe the user wrote is never removed to make
+   * room, and one that is still running is left alone.
+   */
+  prunePlans(keep: number): void {
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM workflows WHERE source = 'planner'
+           AND id NOT IN (SELECT workflow_id FROM workflow_runs WHERE status = 'running')
+         ORDER BY created_at DESC, rowid DESC`,
+      )
+      .all() as { id: string }[];
+    for (const row of rows.slice(Math.max(keep, 0))) {
+      this.delete(row.id);
+    }
   }
 
   update(id: string, input: WorkflowInput): Workflow {
@@ -190,6 +213,8 @@ export class WorkflowStore {
       description: row.description ?? undefined,
       steps: parseSteps(row.steps_json),
       model: row.model ?? undefined,
+      source: row.source === 'planner' ? 'planner' : 'user',
+      goal: row.goal ?? undefined,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

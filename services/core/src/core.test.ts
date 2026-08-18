@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PLAN_LIMITS } from '@jarvis/types';
 import { JarvisCore } from './core.js';
 import { CONFIRMATION_PHRASE } from './services/tool-executor.js';
 
@@ -190,6 +191,32 @@ describe('JarvisCore tool gating and audit', () => {
       'add-scope',
     ]);
     expect(events.every((event) => event.result === 'succeeded')).toBe(true);
+  });
+
+  it('refuses a plan with no goal or more steps than a plan may have', () => {
+    const step = { kind: 'prompt' as const, title: 'x', prompt: 'go' };
+    const plan = { goal: 'tidy up', summary: 'Tidy', steps: [step], notes: [], model: 'm', fallback: false };
+
+    expect(() => core.runPlan({ ...plan, goal: '  ' })).toThrow(/what you want done/i);
+    expect(() =>
+      core.runPlan({ ...plan, steps: Array.from({ length: PLAN_LIMITS.maxSteps + 1 }, () => step) }),
+    ).toThrow(/at most/i);
+  });
+
+  it('saves a plan it runs as a workflow that says Jarvis wrote it', () => {
+    const started = core.runPlan({
+      goal: 'read the notes',
+      summary: 'Read the notes and say what is in them',
+      steps: [{ kind: 'prompt', title: 'Read', prompt: 'about {{input}}', mode: 'ask' }],
+      notes: [],
+      model: 'test-model',
+      fallback: false,
+    });
+
+    const workflow = core.listWorkflows().find((entry) => entry.id === started.workflowId);
+    expect(workflow).toMatchObject({ source: 'planner', goal: 'read the notes' });
+    expect(started.run.input).toBe('read the notes');
+    core.cancelWorkflowRun(started.run.id);
   });
 });
 
