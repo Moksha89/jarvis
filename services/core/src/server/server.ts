@@ -1,0 +1,285 @@
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AuditQuery, ChatMode, PermissionProfileId } from '@jarvis/types';
+import { isRiskLevel } from '@jarvis/types';
+import { JarvisCore, type JarvisCoreOptions } from '../core.js';
+import { CORE_DEFAULT_PORT, type AddRuleBody, type AddScopeBody, type ApproveBody, type CallToolBody, type CreateConversationBody, type DenyBody, type SendChatBody, type SetProfileBody } from '../client/contract.js';
+import { Router, type RequestContext } from './router.js';
+import type { JarvisSettings } from '../store/settings-store.js';
+
+export interface ServerHandle {
+  core: JarvisCore;
+  server: Server;
+  port: number;
+  close: () => Promise<void>;
+}
+
+export interface CreateServerOptions extends JarvisCoreOptions {
+  port?: number;
+  host?: string;
+  /** Origins allowed to call Core. Only the local Tauri webview needs access. */
+  allowedOrigins?: readonly string[];
+}
+
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Core runs as a localhost HTTP service so the Tauri webview never links against
+ * Node-only code (SQLite, child processes) and the boundary stays explicit.
+ */
+export async function createServer(options: CreateServerOptions = {}): Promise<ServerHandle> {
+  const core = new JarvisCore(options);
+  const router = buildRouter(core);
+  const host = options.host ?? '127.0.0.1';
+
+  const server = createHttpServer((request, response) => {
+    void handle(router, request, response);
+  });
+
+  const port = await listen(server, options.port ?? CORE_DEFAULT_PORT, host);
+  return {
+    core,
+    server,
+    port,
+    close: async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      core.close();
+    },
+  };
+}
+
+function listen(server: Server, port: number, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      const address = server.address();
+      resolve(typeof address === 'object' && address ? address.port : port);
+    });
+  });
+}
+
+async function handle(router: Router, request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const url = new URL(request.url ?? '/', 'http://localhost');
+  response.setHeader('access-control-allow-origin', '*');
+  response.setHeader('access-control-allow-headers', 'content-type');
+  response.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204).end();
+    return;
+  }
+
+  const match = router.match(request.method ?? 'GET', url.pathname);
+  if (!match) {
+    send(response, 404, { error: `No route for ${request.method} ${url.pathname}` });
+    return;
+  }
+
+  const ctx: RequestContext = {
+    request,
+    response,
+    params: match.params,
+    query: url.searchParams,
+    json: <T>() => readJson<T>(request),
+    send: (status, body) => send(response, status, body),
+  };
+
+  try {
+    await match.handler(ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!response.headersSent) {
+      send(response, 400, { error: message });
+    } else {
+      response.end();
+    }
+  }
+}
+
+function send(response: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body ?? null);
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(payload);
+}
+
+async function readJson<T>(request: IncomingMessage): Promise<T> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = chunk as Buffer;
+    size += buffer.byteLength;
+    if (size > MAX_BODY_BYTES) throw new Error('Request body is too large.');
+    chunks.push(buffer);
+  }
+  if (chunks.length === 0) return {} as T;
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
+}
+
+function startSse(response: ServerResponse): void {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'access-control-allow-origin': '*',
+  });
+}
+
+function writeSse(response: ServerResponse, payload: unknown): void {
+  response.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function buildRouter(core: JarvisCore): Router {
+  const router = new Router();
+
+  router.get('/api/health', (ctx) => ctx.send(200, { ok: true }));
+  router.get('/api/system/status', async (ctx) => ctx.send(200, await core.getSystemStatus()));
+  router.get('/api/system/resources', (ctx) => ctx.send(200, core.getResources()));
+
+  router.get('/api/models', async (ctx) => ctx.send(200, await core.listModels()));
+  router.post('/api/models/:id/load', async (ctx) => {
+    await core.loadModel(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+  router.post('/api/models/:id/unload', async (ctx) => {
+    await core.unloadModel(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+
+  router.get('/api/conversations', (ctx) => ctx.send(200, core.listConversations()));
+  router.post('/api/conversations', async (ctx) => {
+    const body = await ctx.json<CreateConversationBody>();
+    ctx.send(200, core.createConversation({ mode: parseMode(body.mode), title: body.title, model: body.model }));
+  });
+  router.delete('/api/conversations/:id', (ctx) => {
+    core.deleteConversation(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+  router.get('/api/conversations/:id/messages', (ctx) =>
+    ctx.send(200, core.listMessages(ctx.params.id as string)),
+  );
+
+  router.post('/api/chat', async (ctx) => {
+    const body = await ctx.json<SendChatBody>();
+    const controller = new AbortController();
+    ctx.request.on('close', () => controller.abort());
+    startSse(ctx.response);
+    try {
+      for await (const event of core.sendChat({
+        conversationId: body.conversationId,
+        content: body.content,
+        mode: parseMode(body.mode),
+        model: body.model,
+        retryFromMessageId: body.retryFromMessageId,
+        signal: controller.signal,
+      })) {
+        writeSse(ctx.response, event);
+      }
+    } catch (error) {
+      writeSse(ctx.response, { type: 'error', messageId: '', error: error instanceof Error ? error.message : String(error) });
+    }
+    ctx.response.write('data: [DONE]\n\n');
+    ctx.response.end();
+  });
+
+  router.get('/api/events', (ctx) => {
+    startSse(ctx.response);
+    const heartbeat = setInterval(() => ctx.response.write(': ping\n\n'), 15_000);
+    const unsubscribe = core.bus.onAny((event) => writeSse(ctx.response, event));
+    ctx.request.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+
+  router.get('/api/tasks', (ctx) => ctx.send(200, core.listTasks(numberParam(ctx, 'limit'))));
+
+  router.get('/api/tools', (ctx) => ctx.send(200, core.listTools()));
+  router.get('/api/tools/calls', (ctx) => ctx.send(200, core.listToolCalls(numberParam(ctx, 'limit'))));
+  router.post('/api/tools/call', async (ctx) => {
+    const body = await ctx.json<CallToolBody>();
+    ctx.send(
+      200,
+      await core.callTool(body.toolId, body.input, {
+        conversationId: body.conversationId,
+        taskId: body.taskId,
+      }),
+    );
+  });
+
+  router.get('/api/approvals', (ctx) =>
+    ctx.send(200, core.listApprovals({ pendingOnly: ctx.query.get('pending') === 'true' })),
+  );
+  router.post('/api/approvals/:id/approve', async (ctx) => {
+    const body = await ctx.json<ApproveBody>();
+    ctx.send(200, await core.approve(ctx.params.id as string, body));
+  });
+  router.post('/api/approvals/:id/deny', async (ctx) => {
+    const body = await ctx.json<DenyBody>();
+    ctx.send(200, await core.deny(ctx.params.id as string, body.reason));
+  });
+
+  router.get('/api/permissions', (ctx) => ctx.send(200, core.getPermissionState()));
+  router.post('/api/permissions/profile', async (ctx) => {
+    const body = await ctx.json<SetProfileBody>();
+    core.setPermissionProfile(parseProfile(body.profile));
+    ctx.send(200, core.getPermissionState());
+  });
+  router.post('/api/permissions/rules', async (ctx) => {
+    const body = await ctx.json<AddRuleBody>();
+    if (!isRiskLevel(body.maxRiskLevel)) throw new Error('maxRiskLevel must be an integer between 0 and 4.');
+    ctx.send(200, core.addPermissionRule({ ...body, maxRiskLevel: body.maxRiskLevel }));
+  });
+  router.delete('/api/permissions/rules/:id', (ctx) => {
+    core.deletePermissionRule(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+  router.post('/api/permissions/scopes', async (ctx) => {
+    const body = await ctx.json<AddScopeBody>();
+    if (!body.path?.trim()) throw new Error('A folder path is required.');
+    ctx.send(200, core.addPathScope({ path: body.path.trim(), mode: body.mode, effect: body.effect }));
+  });
+  router.delete('/api/permissions/scopes/:id', (ctx) => {
+    core.deletePathScope(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+
+  router.get('/api/audit', (ctx) => ctx.send(200, core.queryAudit(parseAuditQuery(ctx))));
+
+  router.get('/api/settings', (ctx) => ctx.send(200, core.getSettings()));
+  router.patch('/api/settings', async (ctx) => {
+    const body = await ctx.json<Partial<JarvisSettings>>();
+    ctx.send(200, core.updateSettings(body));
+  });
+
+  return router;
+}
+
+function numberParam(ctx: RequestContext, name: string): number | undefined {
+  const raw = ctx.query.get(name);
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function parseAuditQuery(ctx: RequestContext): AuditQuery {
+  const minRisk = numberParam(ctx, 'minRiskLevel');
+  return {
+    toolId: ctx.query.get('toolId') ?? undefined,
+    result: (ctx.query.get('result') as AuditQuery['result']) ?? undefined,
+    permission: (ctx.query.get('permission') as AuditQuery['permission']) ?? undefined,
+    minRiskLevel: isRiskLevel(minRisk) ? minRisk : undefined,
+    since: ctx.query.get('since') ?? undefined,
+    until: ctx.query.get('until') ?? undefined,
+    search: ctx.query.get('search') ?? undefined,
+    limit: numberParam(ctx, 'limit'),
+    offset: numberParam(ctx, 'offset'),
+  };
+}
+
+function parseMode(mode: string): ChatMode {
+  if (mode === 'ask' || mode === 'plan') return mode;
+  throw new Error(`Unsupported chat mode: ${mode}. This milestone ships Ask and Plan only.`);
+}
+
+function parseProfile(profile: string): PermissionProfileId {
+  if (profile === 'locked' || profile === 'balanced') return profile;
+  throw new Error(`Unsupported permission profile: ${profile}.`);
+}

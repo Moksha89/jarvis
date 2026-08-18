@@ -1,0 +1,14 @@
+node_modules/
+dist/
+target/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+data/
+*.sqlite
+*.sqlite-journal
+*.db
+.DS_Store
+apps/desktop/src-tauri/gen/
+scripts/spike-computeruse/out/
