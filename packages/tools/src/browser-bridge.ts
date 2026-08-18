@@ -55,11 +55,13 @@ export class PlaywrightBrowserBridge implements BrowserBridge {
   async open(options: { url: string }): Promise<BrowserPageInfo> {
     const page = await this.livePage();
     await page.goto(options.url, { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: 'domcontentloaded' });
+    await this.requireWebPage(page);
     return await info(page);
   }
 
   async read(options: { maxChars: number; maxLinks: number }): Promise<BrowserSnapshot> {
     const page = await this.livePage();
+    await this.requireWebPage(page);
     const harvest = await page.evaluate(
       ({ maxChars, maxLinks }) => {
         const text = document.body?.innerText ?? '';
@@ -105,6 +107,7 @@ export class PlaywrightBrowserBridge implements BrowserBridge {
     const locator = await this.resolve(page, options.target);
     await locator.click({ timeout: ACTION_TIMEOUT_MS });
     await page.waitForLoadState('domcontentloaded', { timeout: NAVIGATION_TIMEOUT_MS }).catch(() => undefined);
+    await this.requireWebPage(page);
     return await info(page);
   }
 
@@ -120,11 +123,13 @@ export class PlaywrightBrowserBridge implements BrowserBridge {
       await page.keyboard.press('Enter');
       await page.waitForLoadState('domcontentloaded', { timeout: NAVIGATION_TIMEOUT_MS }).catch(() => undefined);
     }
+    await this.requireWebPage(page);
     return await info(page);
   }
 
   async screenshot(options: { path: string; fullPage: boolean }): Promise<BrowserShot> {
     const page = await this.livePage();
+    await this.requireWebPage(page);
     await page.screenshot({ path: options.path, fullPage: options.fullPage });
     return { path: options.path, bytes: statSync(options.path).size };
   }
@@ -163,6 +168,21 @@ export class PlaywrightBrowserBridge implements BrowserBridge {
   }
 
   /**
+   * http(s) is checked for the session, not only for the URL that was opened: a link
+   * or a submitted form can navigate anywhere, and a `file://` page would otherwise
+   * let a read return local file contents that no folder scope ever allowed. When the
+   * browser lands off the web, the page is blanked before anything is read from it.
+   */
+  private async requireWebPage(page: Page): Promise<void> {
+    const url = page.url();
+    if (isWebUrl(url)) return;
+    await page.goto('about:blank', { timeout: NAVIGATION_TIMEOUT_MS }).catch(() => undefined);
+    throw new Error(
+      `The browser ended up on ${url}, which is not an http or https page. Jarvis left it without reading it.`,
+    );
+  }
+
+  /**
    * Finds what the caller meant by a plain-language target: an accessible name
    * first, then placeholder or label text, then visible text, and only last a raw
    * CSS selector — so a model can say "Search" instead of guessing at the DOM.
@@ -196,6 +216,20 @@ function absolute(href: string, base: string): string {
     return new URL(href, base).toString();
   } catch {
     return href;
+  }
+}
+
+/**
+ * Pages Jarvis will work with: the web, plus the blank page it starts and retreats to.
+ * `file:`, `about:` beyond blank, `chrome:` and `devtools:` are all out.
+ */
+export function isWebUrl(raw: string): boolean {
+  if (raw === '' || raw === 'about:blank') return true;
+  try {
+    const protocol = new URL(raw).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
   }
 }
 
