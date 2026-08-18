@@ -1,0 +1,39 @@
+{
+  "name": "@jarvis/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fluentui/react-components": "9.56.0",
+    "@fluentui/react-icons": "2.0.320",
+    "@jarvis/core": "workspace:*",
+    "@jarvis/types": "workspace:*",
+    "@jarvis/ui": "workspace:*",
+    "@tanstack/react-query": "5.62.7",
+    "@tauri-apps/api": "2.1.1",
+    "highlight.js": "11.11.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "9.0.1",
+    "rehype-highlight": "7.0.1",
+    "remark-gfm": "4.0.0",
+    "zustand": "5.0.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.1.0",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.3.4",
+    "typescript": "5.7.2",
+    "vite": "6.0.5",
+    "vitest": "2.1.8"
+  }
+}
