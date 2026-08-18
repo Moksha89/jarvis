@@ -22,6 +22,12 @@ describe('JarvisCore tool gating and audit', () => {
   it('registers the MVP tools', () => {
     const ids = core.listTools().map((tool) => tool.id);
     expect(ids.filter((id) => !id.startsWith('desktop.'))).toEqual([
+      'browser.click',
+      'browser.close',
+      'browser.open',
+      'browser.read',
+      'browser.screenshot',
+      'browser.type',
       'filesystem.delete',
       'filesystem.list',
       'filesystem.read',

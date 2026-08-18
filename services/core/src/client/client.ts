@@ -55,6 +55,7 @@ export interface CoreSettingsDto {
   memoryEnabled: boolean;
   rememberConversations: boolean;
   desktopControlEnabled: boolean;
+  browserControlEnabled: boolean;
 }
 
 /**

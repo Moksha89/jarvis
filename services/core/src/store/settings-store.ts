@@ -19,6 +19,12 @@ export interface JarvisSettings {
    * lands wherever it lands and no folder scope can contain it.
    */
   desktopControlEnabled: boolean;
+  /**
+   * Let Jarvis act on web pages. Opening and reading pages stays available either
+   * way; clicking and filling in forms is off until the user opts in, because a
+   * click on a page can spend money or send mail.
+   */
+  browserControlEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: JarvisSettings = {
@@ -32,6 +38,7 @@ export const DEFAULT_SETTINGS: JarvisSettings = {
   memoryEnabled: true,
   rememberConversations: true,
   desktopControlEnabled: false,
+  browserControlEnabled: false,
 };
 
 export class SettingsStore {

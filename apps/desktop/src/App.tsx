@@ -4,6 +4,7 @@ import {
   Chat24Regular,
   Cube24Regular,
   Desktop24Regular,
+  Globe24Regular,
   History24Regular,
   Home24Regular,
   Library24Regular,
@@ -22,6 +23,7 @@ import { TasksPage } from './pages/TasksPage.js';
 import { ModelsPage } from './pages/ModelsPage.js';
 import { KnowledgePage } from './pages/KnowledgePage.js';
 import { ScreenPage } from './pages/ScreenPage.js';
+import { WebPage } from './pages/WebPage.js';
 import { PermissionsPage } from './pages/PermissionsPage.js';
 import { ActivityPage } from './pages/ActivityPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
@@ -32,6 +34,7 @@ const navItems: readonly (NavItem & { id: PageId })[] = [
   { id: 'tasks', label: 'Tasks', icon: <TaskListSquareLtr24Regular /> },
   { id: 'knowledge', label: 'Knowledge', icon: <Library24Regular /> },
   { id: 'screen', label: 'Screen', icon: <Desktop24Regular /> },
+  { id: 'web', label: 'Web', icon: <Globe24Regular /> },
   { id: 'models', label: 'Models', icon: <Cube24Regular /> },
   { id: 'permissions', label: 'Permissions', icon: <ShieldTask24Regular /> },
   { id: 'activity', label: 'Activity', icon: <History24Regular /> },
@@ -44,6 +47,7 @@ const pages: Record<PageId, () => JSX.Element> = {
   tasks: TasksPage,
   knowledge: KnowledgePage,
   screen: ScreenPage,
+  web: WebPage,
   models: ModelsPage,
   permissions: PermissionsPage,
   activity: ActivityPage,
