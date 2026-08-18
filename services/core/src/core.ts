@@ -395,11 +395,27 @@ export class JarvisCore {
   }
 
   async addSkillServer(input: McpServerInput): Promise<McpServer> {
-    return await this.mcp.add(input);
+    const created = await this.mcp.add(input);
+    // Adding a skill server means Jarvis will run that program: the decision belongs in
+    // the audit trail next to permission changes, because the program itself is not gated.
+    this.auditSkillServerChange(
+      'add-server',
+      created.name,
+      `Skill server added: ${created.command}${created.args.length > 0 ? ` ${created.args.join(' ')}` : ''} (trust: ${created.trust}).`,
+      4,
+    );
+    return created;
   }
 
   async setSkillServerEnabled(id: string, enabled: boolean): Promise<McpServer> {
-    return await this.mcp.setEnabled(id, enabled);
+    const updated = await this.mcp.setEnabled(id, enabled);
+    this.auditSkillServerChange(
+      enabled ? 'enable-server' : 'disable-server',
+      updated.name,
+      `Skill server ${updated.name} was turned ${enabled ? 'on' : 'off'}.`,
+      enabled ? 3 : 1,
+    );
+    return updated;
   }
 
   async reconnectSkillServer(id: string): Promise<McpServer> {
@@ -407,7 +423,9 @@ export class JarvisCore {
   }
 
   async deleteSkillServer(id: string): Promise<void> {
+    const server = this.mcp.list().find((entry) => entry.id === id);
     await this.mcp.remove(id);
+    this.auditSkillServerChange('delete-server', server?.name ?? id, `Skill server removed: ${server?.name ?? id}.`, 1);
   }
 
   // ---------------------------------------------------------------- tools
@@ -546,6 +564,27 @@ export class JarvisCore {
   ): void {
     const event = this.auditStore.append({
       toolId: 'permissions',
+      action,
+      target,
+      riskLevel,
+      permission: 'allow',
+      permissionReason: 'You changed this yourself in Jarvis.',
+      result: 'succeeded',
+      reversible: true,
+      detail,
+    });
+    this.bus.emit('audit.appended', event);
+  }
+
+  /** Skill servers run outside the tool sandbox, so registering one is audited like a permission change. */
+  private auditSkillServerChange(
+    action: string,
+    target: string,
+    detail: string,
+    riskLevel: AuditEvent['riskLevel'],
+  ): void {
+    const event = this.auditStore.append({
+      toolId: 'skills',
       action,
       target,
       riskLevel,
