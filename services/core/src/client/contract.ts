@@ -1,6 +1,7 @@
 import type {
   ChatMode,
   KnowledgeCorpus,
+  McpServerInput,
   PathScope,
   PermissionProfileId,
   PermissionRule,
@@ -72,6 +73,12 @@ export interface KnowledgeSearchBody {
   limit?: number;
   corpus?: KnowledgeCorpus;
   minScore?: number;
+}
+
+export type AddSkillServerBody = McpServerInput;
+
+export interface SetSkillServerEnabledBody {
+  enabled: boolean;
 }
 
 export interface SetProfileBody {

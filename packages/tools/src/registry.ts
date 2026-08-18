@@ -16,6 +16,11 @@ export class ToolRegistry {
     this.tools.set(tool.id, tool);
   }
 
+  /** Used when a dynamic provider (a skill server) goes away and its tools must stop existing. */
+  unregister(id: string): boolean {
+    return this.tools.delete(id);
+  }
+
   get(id: string): AnyJarvisTool | undefined {
     return this.tools.get(id);
   }

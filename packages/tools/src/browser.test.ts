@@ -90,7 +90,8 @@ describe('browser tools', () => {
   });
 
   it('refuses schemes other than http and https', async () => {
-    for (const url of ['file:///C:/Users/me/secrets.txt', 'javascript:alert(1)', 'not a url']) {
+    // about:blank is where the session may sit, but nobody gets to ask for it.
+    for (const url of ['file:///C:/Users/me/secrets.txt', 'javascript:alert(1)', 'not a url', 'about:blank']) {
       const result = await call('browser.open', { url });
       expect(result.ok).toBe(false);
     }

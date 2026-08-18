@@ -8,6 +8,7 @@ export type PageId =
   | 'knowledge'
   | 'screen'
   | 'web'
+  | 'skills'
   | 'models'
   | 'permissions'
   | 'activity'

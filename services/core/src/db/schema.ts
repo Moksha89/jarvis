@@ -187,6 +187,18 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_lookup ON knowledge_chunks(corpus, model);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document ON knowledge_chunks(document_id);
+
+-- Skill servers speak the Model Context Protocol. Only the launch command is stored;
+-- tokens or keys a server needs belong in the OS credential store, never here.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  command TEXT NOT NULL,
+  args_json TEXT NOT NULL,
+  trust TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
 `;
 
 /**

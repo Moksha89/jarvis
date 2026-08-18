@@ -10,6 +10,7 @@ import type {
   DesktopWindow,
   KnowledgeCorpus,
   KnowledgeIndexProgress,
+  McpServerInput,
   PermissionProfileId,
   SavedTaskInput,
   ToolCallRecord,
@@ -34,6 +35,7 @@ export const queryKeys = {
   knowledgeSources: ['knowledge', 'sources'] as const,
   knowledgeStats: ['knowledge', 'stats'] as const,
   knowledgeDocuments: (sourceId: string) => ['knowledge', 'documents', sourceId] as const,
+  skillServers: ['skills', 'servers'] as const,
 };
 
 export function useSystemStatus() {
@@ -156,6 +158,38 @@ export function useKnowledgeActions() {
   });
 
   return { addSource, removeSource, reindex, search };
+}
+
+export function useSkillServers() {
+  return useQuery({ queryKey: queryKeys.skillServers, queryFn: () => coreClient.listSkillServers() });
+}
+
+/**
+ * A skill server's tools land in the same registry as the built-in ones, so adding or
+ * removing one changes what the model can call: the tool list is invalidated too.
+ */
+export function useSkillServerActions() {
+  const queryClient = useQueryClient();
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.skillServers });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.tools });
+  };
+
+  const add = useMutation({
+    mutationFn: (input: McpServerInput) => coreClient.addSkillServer(input),
+    onSuccess: invalidate,
+  });
+  const setEnabled = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => coreClient.setSkillServerEnabled(id, enabled),
+    onSuccess: invalidate,
+  });
+  const reconnect = useMutation({
+    mutationFn: (id: string) => coreClient.reconnectSkillServer(id),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({ mutationFn: (id: string) => coreClient.deleteSkillServer(id), onSuccess: invalidate });
+
+  return { add, setEnabled, reconnect, remove };
 }
 
 /**
@@ -370,6 +404,12 @@ export function useCoreEvents(): void {
         case 'knowledge.source.changed':
         case 'knowledge.source.deleted':
           void queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+          break;
+        // A skill server that connects or drops changes which tools exist.
+        case 'mcp.server.changed':
+        case 'mcp.server.deleted':
+          void queryClient.invalidateQueries({ queryKey: queryKeys.skillServers });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.tools });
           break;
         case 'knowledge.index.progress':
           // One event per file: refetching here would re-query Core (and Ollama, for

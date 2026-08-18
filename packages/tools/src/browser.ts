@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { BrowserPageInfo, BrowserShot, BrowserSnapshot, JarvisTool } from '@jarvis/types';
 import { RiskLevel } from '@jarvis/types';
 import type { BrowserBridge } from './browser-bridge.js';
-import { isWebUrl, PlaywrightBrowserBridge } from './browser-bridge.js';
+import { PlaywrightBrowserBridge } from './browser-bridge.js';
 import { defaultScreenshotDir } from './desktop.js';
 
 const MAX_CHARS = 20_000;
@@ -253,14 +253,16 @@ function refuseWhenDisabled(controlEnabled: () => boolean): { ok: false; error: 
 
 /**
  * Only http(s): `file://` would turn the browser into a way around the path scopes.
- * The same rule is enforced again inside the bridge for wherever the session ends up,
- * because a link or a submitted form can navigate off the web on its own.
+ * Stricter than the bridge's `isWebUrl`, which also tolerates the blank page the
+ * session may sit on — nobody gets to *ask* for a page that is not on the web.
+ * The bridge re-checks wherever the session ends up, because a link or a submitted
+ * form can navigate off the web on its own.
  */
 function webUrl(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (trimmed === '' || !isWebUrl(trimmed)) return undefined;
   try {
-    return new URL(trimmed).toString();
+    const url = new URL(raw.trim());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    return url.toString();
   } catch {
     return undefined;
   }

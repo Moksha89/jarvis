@@ -7,6 +7,7 @@ import {
   type AddRuleBody,
   type AddScopeBody,
   type AddKnowledgeSourceBody,
+  type AddSkillServerBody,
   type ApproveBody,
   type CallToolBody,
   type KnowledgeSearchBody,
@@ -15,6 +16,7 @@ import {
   type SavedTaskBody,
   type SendChatBody,
   type SetProfileBody,
+  type SetSkillServerEnabledBody,
   type SetTaskEnabledBody,
 } from '../client/contract.js';
 import { Router, type RequestContext } from './router.js';
@@ -71,7 +73,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<S
     port,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      core.close();
+      await core.close();
     },
   };
 }
@@ -358,6 +360,23 @@ function buildRouter(core: JarvisCore): Router {
     );
   });
   router.get('/api/knowledge/stats', async (ctx) => ctx.send(200, await core.getKnowledgeStats()));
+
+  router.get('/api/skills/servers', (ctx) => ctx.send(200, core.listSkillServers()));
+  router.post('/api/skills/servers', async (ctx) => {
+    const body = await ctx.json<AddSkillServerBody>();
+    ctx.send(200, await core.addSkillServer(body));
+  });
+  router.post('/api/skills/servers/:id/enabled', async (ctx) => {
+    const body = await ctx.json<SetSkillServerEnabledBody>();
+    ctx.send(200, await core.setSkillServerEnabled(ctx.params.id as string, body.enabled === true));
+  });
+  router.post('/api/skills/servers/:id/reconnect', async (ctx) =>
+    ctx.send(200, await core.reconnectSkillServer(ctx.params.id as string)),
+  );
+  router.delete('/api/skills/servers/:id', async (ctx) => {
+    await core.deleteSkillServer(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
 
   router.get('/api/audit', (ctx) => ctx.send(200, core.queryAudit(parseAuditQuery(ctx))));
 

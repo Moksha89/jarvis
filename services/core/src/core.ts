@@ -14,6 +14,8 @@ import type {
   KnowledgeSearchOptions,
   KnowledgeSource,
   KnowledgeStats,
+  McpServer,
+  McpServerInput,
   ModelInfo,
   ModelPullProgress,
   PathScope,
@@ -43,12 +45,14 @@ import { openDatabase, type JarvisDatabase } from './db/database.js';
 import { AuditStore } from './store/audit-store.js';
 import { ConversationStore } from './store/conversation-store.js';
 import { KnowledgeStore } from './store/knowledge-store.js';
+import { McpStore } from './store/mcp-store.js';
 import { PermissionStore } from './store/permission-store.js';
 import { SavedTaskStore } from './store/saved-task-store.js';
 import { DEFAULT_SETTINGS, SettingsStore, type JarvisSettings } from './store/settings-store.js';
 import { AgentRunner } from './services/agent-runner.js';
 import { ChatService } from './services/chat-service.js';
 import { KnowledgeService } from './services/knowledge-service.js';
+import { McpManager, type McpConnect } from './services/mcp-manager.js';
 import { createKnowledgeSearchTool } from './services/knowledge-tool.js';
 import { ModelRouter } from './services/model-router.js';
 import { TaskManager } from './services/task-manager.js';
@@ -64,6 +68,10 @@ export interface JarvisCoreOptions {
   enableAgent?: boolean;
   /** Set false in tests so no background schedule fires. */
   enableScheduler?: boolean;
+  /** Set false in tests so no skill server is spawned. */
+  enableSkillServers?: boolean;
+  /** Test seam: connect to a skill server without spawning a process. */
+  mcpConnect?: McpConnect;
 }
 
 export interface ToolDescriptor {
@@ -100,6 +108,8 @@ export class JarvisCore {
   private readonly knowledgeStore: KnowledgeStore;
   private readonly knowledge: KnowledgeService;
   private readonly browserBridge = new PlaywrightBrowserBridge();
+  private readonly mcpStore: McpStore;
+  private readonly mcp: McpManager;
   private readonly startedAt = Date.now();
 
   constructor(options: JarvisCoreOptions = {}) {
@@ -189,6 +199,19 @@ export class JarvisCore {
     );
     if (options.enableScheduler !== false) {
       this.scheduler.start();
+    }
+
+    this.mcpStore = new McpStore(this.db);
+    this.mcp = new McpManager({
+      store: this.mcpStore,
+      registry: this.registry,
+      bus: this.bus,
+      connect: options.mcpConnect,
+    });
+    // Skill servers are external processes: connecting is best-effort and never
+    // delays startup, so a broken server shows as disconnected instead of hanging Core.
+    if (options.enableSkillServers !== false) {
+      void this.mcp.start();
     }
   }
 
@@ -365,6 +388,28 @@ export class JarvisCore {
     return await this.knowledge.stats();
   }
 
+  // ---------------------------------------------------------------- skill servers
+
+  listSkillServers(): McpServer[] {
+    return this.mcp.list();
+  }
+
+  async addSkillServer(input: McpServerInput): Promise<McpServer> {
+    return await this.mcp.add(input);
+  }
+
+  async setSkillServerEnabled(id: string, enabled: boolean): Promise<McpServer> {
+    return await this.mcp.setEnabled(id, enabled);
+  }
+
+  async reconnectSkillServer(id: string): Promise<McpServer> {
+    return await this.mcp.reconnect(id);
+  }
+
+  async deleteSkillServer(id: string): Promise<void> {
+    await this.mcp.remove(id);
+  }
+
   // ---------------------------------------------------------------- tools
 
   listTools(): ToolDescriptor[] {
@@ -477,11 +522,14 @@ export class JarvisCore {
     return updated;
   }
 
-  close(): void {
+  /**
+   * Awaitable because the browser and the skill servers are child processes of their
+   * own: a caller that exits the process without waiting leaves a headed browser
+   * window and its profile lock behind.
+   */
+  async close(): Promise<void> {
     this.scheduler.stop();
-    // The browser is a child process of its own: without this it outlives Core,
-    // leaving a headed window and its profile lock behind.
-    void this.browserBridge.close().catch(() => undefined);
+    await Promise.allSettled([this.browserBridge.close(), this.mcp.stop()]);
     this.bus.clear();
     this.db.close();
   }
