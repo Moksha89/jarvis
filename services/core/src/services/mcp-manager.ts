@@ -59,6 +59,9 @@ interface Session {
  */
 export class McpManager {
   private readonly sessions = new Map<string, Session>();
+  /** Connections still being opened: they have no session to close yet. */
+  private readonly starting = new Map<string, Promise<void>>();
+  private stopped = false;
   private readonly connect: McpConnect;
 
   constructor(private readonly options: McpManagerOptions) {
@@ -101,18 +104,43 @@ export class McpManager {
     this.options.bus.emit('mcp.server.deleted', { id });
   }
 
+  /**
+   * Startup is fire-and-forget (`void start()`), so a shutdown can land while a server is
+   * still being spawned: those connections have no session yet, and only the `open()` that
+   * created them can close them. Wait for them rather than orphan their child processes.
+   */
   async stop(): Promise<void> {
+    this.stopped = true;
+    await Promise.allSettled([...this.starting.values()]);
     await Promise.all([...this.sessions.keys()].map((id) => this.close(id)));
   }
 
   private async open(server: StoredMcpServer): Promise<void> {
+    const opening = this.spawn(server);
+    this.starting.set(server.id, opening);
+    try {
+      await opening;
+    } finally {
+      this.starting.delete(server.id);
+    }
+  }
+
+  private async spawn(server: StoredMcpServer): Promise<void> {
     if (!server.enabled) {
       this.sessions.set(server.id, { toolIds: [], tools: [], connected: false });
       return;
     }
+    // Bound outside the try: a server that starts and then misbehaves must still be closed,
+    // or its child process outlives Jarvis with nothing holding a handle to it.
+    let client: McpClientLike | undefined;
     try {
-      const client = await this.connect(server);
+      client = await this.connect(server);
       const listed = await client.listTools();
+      if (this.stopped) {
+        await closeQuietly(client);
+        this.sessions.set(server.id, { toolIds: [], tools: [], connected: false });
+        return;
+      }
       const definitions = listed.tools.slice(0, MCP_LIMITS.maxToolsPerServer);
       const toolIds: string[] = [];
       const tools: McpToolSummary[] = [];
@@ -126,6 +154,7 @@ export class McpManager {
       }
       this.sessions.set(server.id, { client, toolIds, tools, connected: true });
     } catch (error) {
+      await closeQuietly(client);
       this.sessions.set(server.id, {
         toolIds: [],
         tools: [],
@@ -142,12 +171,7 @@ export class McpManager {
       this.options.registry.unregister(toolId);
     }
     this.sessions.set(id, { toolIds: [], tools: [], connected: false });
-    if (!session.client) return;
-    try {
-      await session.client.close();
-    } catch {
-      // A server that died on its own is already closed as far as Jarvis cares.
-    }
+    await closeQuietly(session.client);
   }
 
   private describe(server: StoredMcpServer): McpServer {
@@ -164,6 +188,16 @@ export class McpManager {
     const described = this.describe(this.options.store.require(id));
     this.options.bus.emit('mcp.server.changed', described);
     return described;
+  }
+}
+
+/** A server that died on its own is already closed as far as Jarvis cares. */
+async function closeQuietly(client: McpClientLike | undefined): Promise<void> {
+  if (!client) return;
+  try {
+    await client.close();
+  } catch {
+    // Nothing left to do: the transport is gone either way.
   }
 }
 

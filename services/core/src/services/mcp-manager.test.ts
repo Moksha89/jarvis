@@ -162,6 +162,42 @@ describe('McpManager', () => {
     await manager.start();
     expect(manager.list()[0]?.connected).toBe(true);
   });
+
+  it('shuts a server down when it starts but will not say what it can do', async () => {
+    const misbehaving = new FakeServer([]);
+    misbehaving.listTools = () => Promise.reject(new Error('protocol error'));
+    const flaky = new McpManager({ store, registry, bus, connect: () => Promise.resolve(misbehaving) });
+    const added = await flaky.add({ name: 'flaky', command: 'fake', args: [], trust: 'normal' });
+    expect(added.connected).toBe(false);
+    // The child process is spawned by then, so it has to be closed rather than abandoned.
+    expect(misbehaving.closed).toBe(true);
+  });
+
+  it('closes a server that was still starting when Jarvis shut down', async () => {
+    store.create({ name: 'slow', command: 'fake', args: [], trust: 'normal' });
+    const slowServer = new FakeServer([{ name: 'read_file' }]);
+    let release: () => void = () => undefined;
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = new McpManager({
+      store,
+      registry,
+      bus,
+      connect: async () => {
+        await opened;
+        return slowServer;
+      },
+    });
+
+    const starting = slow.start();
+    const stopping = slow.stop();
+    release();
+    await Promise.all([starting, stopping]);
+
+    expect(slowServer.closed).toBe(true);
+    expect(registry.get('mcp.slow.read_file')).toBeUndefined();
+  });
 });
 
 describe('skill server tools', () => {

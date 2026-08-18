@@ -233,7 +233,26 @@ export class ToolExecutor {
   }
 
   private async run(record: ToolCallRecord, options: ToolCallOptions): Promise<ToolCallRecord> {
-    const tool = this.registry.require(record.toolId);
+    // A skill server's tools disappear when it is switched off, which can happen while one
+    // of its calls sits in the approval queue: fail that call instead of throwing, or it
+    // stays `running` forever with nothing left to finish it.
+    const tool = this.registry.get(record.toolId);
+    if (!tool) {
+      const gone: ToolCallRecord = {
+        ...record,
+        status: 'failed',
+        finishedAt: new Date().toISOString(),
+        result: {
+          ok: false,
+          error: `The tool "${record.toolId}" is no longer available. Its skill server may have been switched off.`,
+          summary: `Unavailable: ${record.intent.summary}`,
+        },
+      };
+      this.updateCall(gone);
+      this.appendAudit(gone, 'failed', 0, options);
+      this.bus.emit('tool.call.changed', gone);
+      return gone;
+    }
     const startedAt = Date.now();
     this.bus.emit('tool.call.changed', record);
     let result: ToolResult;

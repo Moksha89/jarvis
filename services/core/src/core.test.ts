@@ -193,6 +193,52 @@ describe('JarvisCore tool gating and audit', () => {
   });
 });
 
+describe('skill server tools awaiting approval', () => {
+  let core: JarvisCore;
+
+  beforeEach(() => {
+    core = new JarvisCore({
+      databaseFile: ':memory:',
+      enableAgent: false,
+      enableScheduler: false,
+      mcpConnect: () =>
+        Promise.resolve({
+          listTools: () => Promise.resolve({ tools: [{ name: 'do_thing', description: 'Do a thing.' }] }),
+          callTool: () => Promise.resolve({ content: [{ type: 'text', text: 'done' }] }),
+          close: () => Promise.resolve(),
+        }),
+    });
+  });
+
+  afterEach(async () => {
+    await core.close();
+  });
+
+  it('fails the waiting call when the server was switched off, instead of leaving it stuck', async () => {
+    const server = await core.addSkillServer({ name: 'demo', command: 'fake', args: [], trust: 'normal' });
+    const call = await core.callTool('mcp.demo.do_thing', {});
+    expect(call.status).toBe('pending-approval');
+
+    await core.setSkillServerEnabled(server.id, false);
+    const [approval] = core.listApprovals({ pendingOnly: true });
+    const finished = await core.approve(approval!.id);
+
+    expect(finished.status).toBe('failed');
+    expect(finished.result?.error).toMatch(/no longer available/);
+    expect(core.listApprovals({ pendingOnly: true })).toHaveLength(0);
+  });
+
+  it('audits registering and switching off a skill server, since Jarvis runs that program', async () => {
+    const server = await core.addSkillServer({ name: 'demo', command: 'fake', args: ['--stdio'], trust: 'normal' });
+    await core.setSkillServerEnabled(server.id, false);
+    await core.deleteSkillServer(server.id);
+
+    const events = core.queryAudit({ toolId: 'skills' });
+    expect(events.map((event) => event.action)).toEqual(['delete-server', 'disable-server', 'add-server']);
+    expect(events.at(-1)?.detail).toMatch(/fake --stdio/);
+  });
+});
+
 describe('pending approvals across restarts', () => {
   let workspace: string;
   let databaseFile: string;
