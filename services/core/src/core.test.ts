@@ -95,21 +95,17 @@ describe('JarvisCore tool gating and audit', () => {
     expect(readFileSync(file, 'utf8')).toBe('keep me');
   });
 
-  it(
-    'moves deletes to the recycle bin / trash after approval',
-    async () => {
-      const file = join(workspace, 'trash-me.txt');
-      writeFileSync(file, 'bye', 'utf8');
-      const call = await core.callTool('filesystem.delete', { path: file });
-      expect(call.status).toBe('pending-approval');
-      const [approval] = core.listApprovals({ pendingOnly: true });
-      expect(approval?.reversible).toBe(true);
-      const finished = await core.approve(approval!.id);
-      expect(finished.status).toBe('succeeded');
-      expect(existsSync(file)).toBe(false);
-    },
-    15_000,
-  );
+  it('moves deletes to the recycle bin / trash after approval', async () => {
+    const file = join(workspace, 'trash-me.txt');
+    writeFileSync(file, 'bye', 'utf8');
+    const call = await core.callTool('filesystem.delete', { path: file });
+    expect(call.status).toBe('pending-approval');
+    const [approval] = core.listApprovals({ pendingOnly: true });
+    expect(approval?.reversible).toBe(true);
+    const finished = await core.approve(approval!.id);
+    expect(finished.status).toBe('succeeded');
+    expect(existsSync(file)).toBe(false);
+  });
 
   it('runs read-only shell commands without approval', async () => {
     const call = await core.callTool('shell.run', { command: 'echo jarvis', cwd: workspace });
@@ -222,9 +218,79 @@ describe('skill server tools awaiting approval', () => {
     const server = await core.addSkillServer({ name: 'demo', command: 'fake', args: [], trust: 'normal' });
     const call = await core.callTool('mcp.demo.do_thing', {});
     expect(call.status).toBe('pending-approval');
-    const waiting = core.approve(call.approvalId!);
-    await core.updateSkillServer(server.id, { enabled: false });
-    const done = await waiting;
-    expect(done.status).toBe('failed');
+
+    await core.setSkillServerEnabled(server.id, false);
+    const [approval] = core.listApprovals({ pendingOnly: true });
+    const finished = await core.approve(approval!.id);
+
+    expect(finished.status).toBe('failed');
+    expect(finished.result?.error).toMatch(/no longer available/);
+    expect(core.listApprovals({ pendingOnly: true })).toHaveLength(0);
+  });
+
+  it('audits registering and switching off a skill server, since Jarvis runs that program', async () => {
+    const server = await core.addSkillServer({ name: 'demo', command: 'fake', args: ['--stdio'], trust: 'normal' });
+    await core.setSkillServerEnabled(server.id, false);
+    await core.deleteSkillServer(server.id);
+
+    const events = core.queryAudit({ toolId: 'skills' });
+    expect(events.map((event) => event.action)).toEqual(['delete-server', 'disable-server', 'add-server']);
+    expect(events.at(-1)?.detail).toMatch(/fake --stdio/);
+  });
+});
+
+describe('pending approvals across restarts', () => {
+  let workspace: string;
+  let databaseFile: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'jarvis-restart-'));
+    databaseFile = join(workspace, 'jarvis.db');
+  });
+
+  it('can approve a call that was left pending before Jarvis was closed', async () => {
+    const file = join(workspace, 'kept.txt');
+    writeFileSync(file, 'original', 'utf8');
+
+    const first = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    first.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
+    const call = await first.callTool('filesystem.write', { path: file, content: 'replaced' });
+    expect(call.status).toBe('pending-approval');
+    await first.close();
+
+    const second = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    try {
+      const [approval] = second.listApprovals({ pendingOnly: true });
+      expect(approval?.target).toBe(call.intent.target);
+
+      const finished = await second.approve(approval!.id);
+      expect(finished.id).toBe(call.id);
+      expect(finished.status).toBe('succeeded');
+      expect(readFileSync(file, 'utf8')).toBe('replaced');
+      expect(second.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    } finally {
+      await second.close();
+    }
+  });
+
+  it('keeps a denial permanent after a restart', async () => {
+    const file = join(workspace, 'kept.txt');
+    writeFileSync(file, 'original', 'utf8');
+
+    const first = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    first.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
+    await first.callTool('filesystem.write', { path: file, content: 'replaced' });
+    await first.close();
+
+    const second = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    try {
+      const [approval] = second.listApprovals({ pendingOnly: true });
+      const denied = await second.deny(approval!.id, 'Not this time.');
+      expect(denied.status).toBe('denied');
+      expect(readFileSync(file, 'utf8')).toBe('original');
+      await expect(second.deny(approval!.id)).rejects.toThrow();
+    } finally {
+      await second.close();
+    }
   });
 });
