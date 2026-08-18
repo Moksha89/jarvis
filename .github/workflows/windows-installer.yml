@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - chatgpt/windows-bundled-installer
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -104,10 +107,9 @@ jobs:
         run: pnpm --filter @jarvis/desktop tauri build --bundles nsis
 
       - name: Locate installer
-        id: installer
         shell: pwsh
         run: |
-          $files = Get-ChildItem 'apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe'
+          $files = @(Get-ChildItem 'apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe')
           if ($files.Count -ne 1) {
             throw "Expected exactly one NSIS installer, found $($files.Count)"
           }
