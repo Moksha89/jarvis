@@ -2,8 +2,11 @@ import type {
   ApprovalRequest,
   AuditEvent,
   ChatStreamEvent,
+  ModelPullProgress,
   ModelRuntimeInfo,
+  SavedTask,
   Task,
+  TaskRun,
   ToolCallRecord,
 } from '@jarvis/types';
 
@@ -11,6 +14,10 @@ import type {
 export interface JarvisEventMap {
   'chat.stream': ChatStreamEvent;
   'task.changed': Task;
+  'task.saved.changed': SavedTask;
+  'task.saved.deleted': { id: string };
+  'task.run.changed': TaskRun;
+  'model.pull.progress': ModelPullProgress & { model: string };
   'tool.call.changed': ToolCallRecord;
   'approval.requested': ApprovalRequest;
   'approval.resolved': ApprovalRequest;

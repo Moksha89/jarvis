@@ -10,12 +10,16 @@ import type {
   ChatMessage,
   JarvisTool,
   ModelInfo,
+  ModelPullProgress,
   PathScope,
   PermissionProfileId,
   PermissionRule,
   ResourceSnapshot,
+  SavedTask,
+  SavedTaskInput,
   SystemStatus,
   Task,
+  TaskRun,
   ToolCallRecord,
 } from '@jarvis/types';
 import { EventBus } from '@jarvis/events';
@@ -26,10 +30,13 @@ import { openDatabase, type JarvisDatabase } from './db/database.js';
 import { AuditStore } from './store/audit-store.js';
 import { ConversationStore } from './store/conversation-store.js';
 import { PermissionStore } from './store/permission-store.js';
+import { SavedTaskStore } from './store/saved-task-store.js';
 import { DEFAULT_SETTINGS, SettingsStore, type JarvisSettings } from './store/settings-store.js';
+import { AgentRunner } from './services/agent-runner.js';
 import { ChatService } from './services/chat-service.js';
 import { ModelRouter } from './services/model-router.js';
 import { TaskManager } from './services/task-manager.js';
+import { TaskScheduler } from './services/task-scheduler.js';
 import { ToolExecutor, type ApproveOptions, type ToolCallOptions } from './services/tool-executor.js';
 
 export const CORE_VERSION = '0.1.0';
@@ -39,6 +46,8 @@ export interface JarvisCoreOptions {
   databaseFile?: string;
   /** Set false in tests to avoid spawning `qwen serve`. */
   enableAgent?: boolean;
+  /** Set false in tests so no background schedule fires. */
+  enableScheduler?: boolean;
 }
 
 export interface ToolDescriptor {
@@ -69,6 +78,8 @@ export class JarvisCore {
   private readonly agent: QwenCodeAgentAdapter | StubAgentAdapter;
   private readonly agentMode: 'qwen-serve' | 'stub';
   private readonly tasks: TaskManager;
+  private readonly savedTasks: SavedTaskStore;
+  private readonly scheduler: TaskScheduler;
   private readonly chat: ChatService;
   private readonly startedAt = Date.now();
 
@@ -111,14 +122,32 @@ export class JarvisCore {
     this.executor = new ToolExecutor(this.db, this.registry, this.engine, this.auditStore, this.bus, (rule) =>
       this.addPermissionRule({ ...rule, effect: 'allow', note: 'Created from an approval dialog' }),
     );
+    const agentRunner = new AgentRunner(this.runtime, this.registry, this.executor, this.bus);
     this.chat = new ChatService(
       this.conversationStore,
       router,
       this.runtime,
       this.tasks,
       this.bus,
+      agentRunner,
       this.agentMode === 'qwen-serve' ? this.agent : undefined,
     );
+
+    this.savedTasks = new SavedTaskStore(this.db);
+    this.scheduler = new TaskScheduler(this.savedTasks, this.conversationStore, this.bus, (invocation) =>
+      this.chat.send({
+        conversationId: invocation.conversationId,
+        content: invocation.prompt,
+        mode: invocation.mode,
+        model: invocation.model,
+        maxSteps: invocation.maxSteps,
+        signal: invocation.signal,
+        unattended: true,
+      }),
+    );
+    if (options.enableScheduler !== false) {
+      this.scheduler.start();
+    }
   }
 
   // ---------------------------------------------------------------- system
@@ -171,6 +200,18 @@ export class JarvisCore {
     this.bus.emit('runtime.status', await this.runtime.status());
   }
 
+  /** Download a model, republishing the runtime's progress on the event bus. */
+  async *pullModel(model: string, signal?: AbortSignal): AsyncGenerator<ModelPullProgress> {
+    for await (const progress of this.runtime.pullModel(model, signal)) {
+      this.bus.emit('model.pull.progress', { ...progress, model });
+      yield progress;
+    }
+  }
+
+  async deleteModel(model: string): Promise<void> {
+    await this.runtime.deleteModel(model);
+  }
+
   // ---------------------------------------------------------------- chat
 
   listConversations(): Conversation[] {
@@ -196,6 +237,8 @@ export class JarvisCore {
     model?: string;
     retryFromMessageId?: string;
     signal?: AbortSignal;
+    /** Agent mode only: tool-step budget for this turn. */
+    maxSteps?: number;
   }): AsyncGenerator<ChatStreamEvent> {
     return this.chat.send(options);
   }
@@ -204,6 +247,45 @@ export class JarvisCore {
 
   listTasks(limit?: number): Task[] {
     return this.tasks.list({ limit });
+  }
+
+  listSavedTasks(): SavedTask[] {
+    return this.savedTasks.list();
+  }
+
+  createSavedTask(input: SavedTaskInput): SavedTask {
+    const created = this.savedTasks.create(input);
+    this.bus.emit('task.saved.changed', created);
+    return created;
+  }
+
+  updateSavedTask(id: string, input: SavedTaskInput): SavedTask {
+    const updated = this.savedTasks.update(id, input);
+    this.bus.emit('task.saved.changed', updated);
+    return updated;
+  }
+
+  setSavedTaskEnabled(id: string, enabled: boolean): SavedTask {
+    const updated = this.savedTasks.setEnabled(id, enabled);
+    this.bus.emit('task.saved.changed', updated);
+    return updated;
+  }
+
+  deleteSavedTask(id: string): void {
+    this.savedTasks.delete(id);
+    this.bus.emit('task.saved.deleted', { id });
+  }
+
+  runSavedTask(id: string): TaskRun {
+    return this.scheduler.runNow(id);
+  }
+
+  cancelTaskRun(runId: string): TaskRun {
+    return this.scheduler.cancelRun(runId);
+  }
+
+  listTaskRuns(options: { taskId?: string; limit?: number } = {}): TaskRun[] {
+    return this.savedTasks.listRuns(options);
   }
 
   // ---------------------------------------------------------------- tools
@@ -253,30 +335,53 @@ export class JarvisCore {
   }
 
   setPermissionProfile(profile: PermissionProfileId): void {
+    const previous = this.settingsStore.getAll().permissionProfile;
     this.settingsStore.patch({ permissionProfile: profile });
     this.refreshPermissionContext();
+    this.auditPermissionChange('set-profile', profile, `Permission profile changed from ${previous} to ${profile}.`, 3);
   }
 
   addPermissionRule(rule: Omit<PermissionRule, 'id' | 'createdAt'>): PermissionRule {
     const created = this.permissionStore.addRule(rule);
     this.refreshPermissionContext();
+    this.auditPermissionChange(
+      'add-rule',
+      created.toolPattern,
+      `Rule added: ${created.effect} ${created.toolPattern}${created.targetPattern ? ` on ${created.targetPattern}` : ''} up to risk L${created.maxRiskLevel}.`,
+      created.effect === 'allow' ? 3 : 1,
+    );
     return created;
   }
 
   deletePermissionRule(id: string): void {
+    const removed = this.permissionStore.listRules().find((rule) => rule.id === id);
     this.permissionStore.deleteRule(id);
     this.refreshPermissionContext();
+    this.auditPermissionChange(
+      'delete-rule',
+      removed?.toolPattern ?? id,
+      `Rule removed: ${removed ? `${removed.effect} ${removed.toolPattern}` : id}.`,
+      1,
+    );
   }
 
   addPathScope(scope: Omit<PathScope, 'id' | 'createdAt'>): PathScope {
     const created = this.permissionStore.addScope(scope);
     this.refreshPermissionContext();
+    this.auditPermissionChange(
+      'add-scope',
+      created.path,
+      `Folder scope added: ${created.effect} ${created.mode} on ${created.path}.`,
+      created.effect === 'allow' && created.mode === 'read-write' ? 3 : 2,
+    );
     return created;
   }
 
   deletePathScope(id: string): void {
+    const removed = this.permissionStore.listScopes().find((scope) => scope.id === id);
     this.permissionStore.deleteScope(id);
     this.refreshPermissionContext();
+    this.auditPermissionChange('delete-scope', removed?.path ?? id, `Folder scope removed: ${removed?.path ?? id}.`, 1);
   }
 
   // ---------------------------------------------------------------- audit & settings
@@ -296,8 +401,33 @@ export class JarvisCore {
   }
 
   close(): void {
+    this.scheduler.stop();
     this.bus.clear();
     this.db.close();
+  }
+
+  /**
+   * Permission changes are themselves security-relevant, so they land in the same
+   * audit trail as tool calls under the synthetic `permissions` tool.
+   */
+  private auditPermissionChange(
+    action: string,
+    target: string,
+    detail: string,
+    riskLevel: AuditEvent['riskLevel'],
+  ): void {
+    const event = this.auditStore.append({
+      toolId: 'permissions',
+      action,
+      target,
+      riskLevel,
+      permission: 'allow',
+      permissionReason: 'You changed this yourself in Jarvis.',
+      result: 'succeeded',
+      reversible: true,
+      detail,
+    });
+    this.bus.emit('audit.appended', event);
   }
 
   private refreshPermissionContext(): void {

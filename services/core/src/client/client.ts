@@ -3,16 +3,18 @@ import type {
   AuditEvent,
   AuditQuery,
   ChatMessage,
-  ChatMode,
   ChatStreamEvent,
   Conversation,
   ModelInfo,
+  ModelPullProgress,
   PathScope,
   PermissionProfileId,
   PermissionRule,
   ResourceSnapshot,
+  SavedTask,
   SystemStatus,
   Task,
+  TaskRun,
   ToolCallRecord,
 } from '@jarvis/types';
 import type { JarvisEvent } from '@jarvis/events';
@@ -22,6 +24,8 @@ import {
   type AddScopeBody,
   type ApproveBody,
   type CreateConversationBody,
+  type SavedTaskBody,
+  type SendChatBody,
 } from './contract.js';
 
 export interface ToolDescriptorDto {
@@ -70,6 +74,27 @@ export class JarvisClient {
   unloadModel(id: string): Promise<{ ok: boolean }> {
     return this.post(`/api/models/${encodeURIComponent(id)}/unload`, {});
   }
+  deleteModel(id: string): Promise<{ ok: boolean }> {
+    return this.delete(`/api/models/${encodeURIComponent(id)}`);
+  }
+  /** Streams download progress for a model that is not installed yet. */
+  async *pullModel(id: string, signal?: AbortSignal): AsyncGenerator<ModelPullProgress> {
+    const response = await fetch(`${this.baseUrl}/api/models/${encodeURIComponent(id)}/pull`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal,
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Core rejected the pull request (${response.status}).`);
+    }
+    for await (const payload of readSse(response.body)) {
+      if (payload === '[DONE]') return;
+      const parsed = JSON.parse(payload) as ModelPullProgress | { error: string };
+      if ('error' in parsed) throw new Error(parsed.error);
+      yield parsed;
+    }
+  }
 
   listConversations(): Promise<Conversation[]> {
     return this.get('/api/conversations');
@@ -85,10 +110,7 @@ export class JarvisClient {
   }
 
   /** Streams assistant output. Abort the signal to stop generation. */
-  async *sendChat(
-    body: { conversationId: string; content: string; mode: ChatMode; model?: string; retryFromMessageId?: string },
-    signal?: AbortSignal,
-  ): AsyncGenerator<ChatStreamEvent> {
+  async *sendChat(body: SendChatBody, signal?: AbortSignal): AsyncGenerator<ChatStreamEvent> {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -106,6 +128,35 @@ export class JarvisClient {
 
   listTasks(limit?: number): Promise<Task[]> {
     return this.get(`/api/tasks${limit ? `?limit=${limit}` : ''}`);
+  }
+
+  listSavedTasks(): Promise<SavedTask[]> {
+    return this.get('/api/saved-tasks');
+  }
+  createSavedTask(body: SavedTaskBody): Promise<SavedTask> {
+    return this.post('/api/saved-tasks', body);
+  }
+  updateSavedTask(id: string, body: SavedTaskBody): Promise<SavedTask> {
+    return this.request('PATCH', `/api/saved-tasks/${encodeURIComponent(id)}`, body);
+  }
+  setSavedTaskEnabled(id: string, enabled: boolean): Promise<SavedTask> {
+    return this.post(`/api/saved-tasks/${encodeURIComponent(id)}/enabled`, { enabled });
+  }
+  deleteSavedTask(id: string): Promise<{ ok: boolean }> {
+    return this.delete(`/api/saved-tasks/${encodeURIComponent(id)}`);
+  }
+  runSavedTask(id: string): Promise<TaskRun> {
+    return this.post(`/api/saved-tasks/${encodeURIComponent(id)}/run`, {});
+  }
+  listTaskRuns(options: { taskId?: string; limit?: number } = {}): Promise<TaskRun[]> {
+    const params = new URLSearchParams();
+    if (options.taskId) params.set('taskId', options.taskId);
+    if (options.limit) params.set('limit', String(options.limit));
+    const suffix = params.toString();
+    return this.get(`/api/task-runs${suffix ? `?${suffix}` : ''}`);
+  }
+  cancelTaskRun(runId: string): Promise<TaskRun> {
+    return this.post(`/api/task-runs/${encodeURIComponent(runId)}/cancel`, {});
   }
 
   listTools(): Promise<ToolDescriptorDto[]> {

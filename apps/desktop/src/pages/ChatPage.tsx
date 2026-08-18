@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import {
   Body1,
+  Button,
   Card,
   Dropdown,
   MessageBar,
@@ -13,7 +14,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import type { ChatMode } from '@jarvis/types';
-import { PromptComposer, jarvisSpacing } from '@jarvis/ui';
+import { PromptComposer, StatusBadge, jarvisSpacing } from '@jarvis/ui';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { coreClient } from '../core-client.js';
 import { MessageBubble } from '../components/MessageBubble.js';
@@ -29,7 +30,23 @@ const useStyles = makeStyles({
   streaming: { padding: jarvisSpacing.m, border: `1px solid ${tokens.colorNeutralStroke2}` },
   toolbar: { display: 'flex', alignItems: 'center', gap: jarvisSpacing.m, flexWrap: 'wrap' },
   empty: { color: tokens.colorNeutralForeground3 },
+  trail: { display: 'flex', flexDirection: 'column', gap: jarvisSpacing.xs, marginTop: jarvisSpacing.s },
+  trailRow: { display: 'flex', alignItems: 'center', gap: jarvisSpacing.xs },
 });
+
+const ACTIVITY_TONE = {
+  running: 'info',
+  'awaiting-approval': 'warning',
+  done: 'ok',
+  failed: 'error',
+} as const;
+
+const ACTIVITY_LABEL = {
+  running: 'Running',
+  'awaiting-approval': 'Needs approval',
+  done: 'Done',
+  failed: 'Failed',
+} as const;
 
 export function ChatPage() {
   const styles = useStyles();
@@ -67,7 +84,7 @@ export function ChatPage() {
     <div className={styles.root}>
       <PageHeader
         title="Chat"
-        description="Streamed, local conversation. Ask answers questions; Plan drafts a step-by-step plan without acting."
+        description="Streamed, local conversation. Ask answers questions, Plan drafts steps without acting, Agent uses permission-gated tools."
       />
 
       {stream.error ? (
@@ -100,6 +117,17 @@ export function ChatPage() {
         {stream.busy ? (
           <Card className={styles.streaming}>
             {stream.text ? <Markdown content={stream.text} /> : <Spinner size="tiny" label="Thinking…" />}
+            {stream.step ? (
+              <div className={styles.trail}>
+                <Body1 className={styles.empty}>{`Step ${stream.step.current} of ${stream.step.max}`}</Body1>
+                {stream.activity.map((entry) => (
+                  <div key={entry.callId} className={styles.trailRow}>
+                    <StatusBadge tone={ACTIVITY_TONE[entry.state]} label={ACTIVITY_LABEL[entry.state]} />
+                    <Body1>{`${entry.toolId} · ${entry.summary}`}</Body1>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </Card>
         ) : null}
       </div>
@@ -114,6 +142,7 @@ export function ChatPage() {
             <RadioGroup layout="horizontal" value={chatMode} onChange={(_, data) => setChatMode(data.value as ChatMode)}>
               <Radio value="ask" label="Ask" />
               <Radio value="plan" label="Plan" />
+              <Radio value="agent" label="Agent" />
             </RadioGroup>
             <Dropdown
               placeholder={modelOptions.length ? 'Default model' : 'No models available'}
@@ -128,6 +157,13 @@ export function ChatPage() {
                 </Option>
               ))}
             </Dropdown>
+            <Button
+              size="small"
+              disabled={stream.busy || createConversation.isPending}
+              onClick={() => createConversation.mutate(chatMode)}
+            >
+              New conversation
+            </Button>
           </div>
         }
       />

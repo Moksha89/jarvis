@@ -10,7 +10,7 @@ describe('JarvisCore tool gating and audit', () => {
   let workspace: string;
 
   beforeEach(() => {
-    core = new JarvisCore({ databaseFile: ':memory:', enableAgent: false });
+    core = new JarvisCore({ databaseFile: ':memory:', enableAgent: false, enableScheduler: false });
     workspace = mkdtempSync(join(tmpdir(), 'jarvis-test-'));
     core.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
   });
@@ -156,5 +156,84 @@ describe('JarvisCore tool gating and audit', () => {
     core.setPermissionProfile('locked');
     const call = await core.callTool('filesystem.write', { path: join(workspace, 'locked.txt'), content: 'x' });
     expect(call.status).toBe('pending-approval');
+  });
+
+  it('audits permission changes, since loosening permissions is itself an action', () => {
+    // beforeEach already added the workspace scope, so that add is audited too.
+    core.setPermissionProfile('locked');
+    const rule = core.addPermissionRule({
+      toolPattern: 'filesystem.read',
+      effect: 'allow',
+      maxRiskLevel: 1,
+    });
+    core.deletePermissionRule(rule.id);
+    const [scope] = core.getPermissionState().scopes;
+    core.deletePathScope(scope!.id);
+
+    const events = core.queryAudit({ toolId: 'permissions' });
+    expect(events.map((event) => event.action)).toEqual([
+      'delete-scope',
+      'delete-rule',
+      'add-rule',
+      'set-profile',
+      'add-scope',
+    ]);
+    expect(events.every((event) => event.result === 'succeeded')).toBe(true);
+  });
+});
+
+describe('pending approvals across restarts', () => {
+  let workspace: string;
+  let databaseFile: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'jarvis-restart-'));
+    databaseFile = join(workspace, 'jarvis.db');
+  });
+
+  it('can approve a call that was left pending before Jarvis was closed', async () => {
+    const file = join(workspace, 'kept.txt');
+    writeFileSync(file, 'original', 'utf8');
+
+    const first = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    first.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
+    const call = await first.callTool('filesystem.write', { path: file, content: 'replaced' });
+    expect(call.status).toBe('pending-approval');
+    first.close();
+
+    const second = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    try {
+      const [approval] = second.listApprovals({ pendingOnly: true });
+      expect(approval?.target).toBe(call.intent.target);
+
+      const finished = await second.approve(approval!.id);
+      expect(finished.id).toBe(call.id);
+      expect(finished.status).toBe('succeeded');
+      expect(readFileSync(file, 'utf8')).toBe('replaced');
+      expect(second.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    } finally {
+      second.close();
+    }
+  });
+
+  it('keeps a denial permanent after a restart', async () => {
+    const file = join(workspace, 'kept.txt');
+    writeFileSync(file, 'original', 'utf8');
+
+    const first = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    first.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
+    await first.callTool('filesystem.write', { path: file, content: 'replaced' });
+    first.close();
+
+    const second = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
+    try {
+      const [approval] = second.listApprovals({ pendingOnly: true });
+      const denied = await second.deny(approval!.id, 'Not this time.');
+      expect(denied.status).toBe('denied');
+      expect(readFileSync(file, 'utf8')).toBe('original');
+      await expect(second.deny(approval!.id)).rejects.toThrow();
+    } finally {
+      second.close();
+    }
   });
 });

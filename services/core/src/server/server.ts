@@ -2,7 +2,19 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import type { AuditQuery, ChatMode, PermissionProfileId } from '@jarvis/types';
 import { isRiskLevel } from '@jarvis/types';
 import { JarvisCore, type JarvisCoreOptions } from '../core.js';
-import { CORE_DEFAULT_PORT, type AddRuleBody, type AddScopeBody, type ApproveBody, type CallToolBody, type CreateConversationBody, type DenyBody, type SendChatBody, type SetProfileBody } from '../client/contract.js';
+import {
+  CORE_DEFAULT_PORT,
+  type AddRuleBody,
+  type AddScopeBody,
+  type ApproveBody,
+  type CallToolBody,
+  type CreateConversationBody,
+  type DenyBody,
+  type SavedTaskBody,
+  type SendChatBody,
+  type SetProfileBody,
+  type SetTaskEnabledBody,
+} from '../client/contract.js';
 import { Router, type RequestContext } from './router.js';
 import type { JarvisSettings } from '../store/settings-store.js';
 
@@ -142,6 +154,25 @@ function buildRouter(core: JarvisCore): Router {
     await core.unloadModel(ctx.params.id as string);
     ctx.send(200, { ok: true });
   });
+  // Pulls take minutes, so progress streams instead of blocking one response.
+  router.post('/api/models/:id/pull', async (ctx) => {
+    const controller = new AbortController();
+    ctx.request.on('close', () => controller.abort());
+    startSse(ctx.response);
+    try {
+      for await (const progress of core.pullModel(ctx.params.id as string, controller.signal)) {
+        writeSse(ctx.response, progress);
+      }
+    } catch (error) {
+      writeSse(ctx.response, { error: error instanceof Error ? error.message : String(error) });
+    }
+    ctx.response.write('data: [DONE]\n\n');
+    ctx.response.end();
+  });
+  router.delete('/api/models/:id', async (ctx) => {
+    await core.deleteModel(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
 
   router.get('/api/conversations', (ctx) => ctx.send(200, core.listConversations()));
   router.post('/api/conversations', async (ctx) => {
@@ -168,6 +199,7 @@ function buildRouter(core: JarvisCore): Router {
         mode: parseMode(body.mode),
         model: body.model,
         retryFromMessageId: body.retryFromMessageId,
+        maxSteps: body.maxSteps,
         signal: controller.signal,
       })) {
         writeSse(ctx.response, event);
@@ -190,6 +222,32 @@ function buildRouter(core: JarvisCore): Router {
   });
 
   router.get('/api/tasks', (ctx) => ctx.send(200, core.listTasks(numberParam(ctx, 'limit'))));
+
+  router.get('/api/saved-tasks', (ctx) => ctx.send(200, core.listSavedTasks()));
+  router.post('/api/saved-tasks', async (ctx) => {
+    const body = await ctx.json<SavedTaskBody>();
+    ctx.send(200, core.createSavedTask(body));
+  });
+  router.patch('/api/saved-tasks/:id', async (ctx) => {
+    const body = await ctx.json<SavedTaskBody>();
+    ctx.send(200, core.updateSavedTask(ctx.params.id as string, body));
+  });
+  router.post('/api/saved-tasks/:id/enabled', async (ctx) => {
+    const body = await ctx.json<SetTaskEnabledBody>();
+    ctx.send(200, core.setSavedTaskEnabled(ctx.params.id as string, body.enabled === true));
+  });
+  router.post('/api/saved-tasks/:id/run', (ctx) => ctx.send(200, core.runSavedTask(ctx.params.id as string)));
+  router.delete('/api/saved-tasks/:id', (ctx) => {
+    core.deleteSavedTask(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+  router.get('/api/task-runs', (ctx) =>
+    ctx.send(
+      200,
+      core.listTaskRuns({ taskId: ctx.query.get('taskId') ?? undefined, limit: numberParam(ctx, 'limit') }),
+    ),
+  );
+  router.post('/api/task-runs/:id/cancel', (ctx) => ctx.send(200, core.cancelTaskRun(ctx.params.id as string)));
 
   router.get('/api/tools', (ctx) => ctx.send(200, core.listTools()));
   router.get('/api/tools/calls', (ctx) => ctx.send(200, core.listToolCalls(numberParam(ctx, 'limit'))));
@@ -275,8 +333,8 @@ function parseAuditQuery(ctx: RequestContext): AuditQuery {
 }
 
 function parseMode(mode: string): ChatMode {
-  if (mode === 'ask' || mode === 'plan') return mode;
-  throw new Error(`Unsupported chat mode: ${mode}. This milestone ships Ask and Plan only.`);
+  if (mode === 'ask' || mode === 'plan' || mode === 'agent') return mode;
+  throw new Error(`Unsupported chat mode: ${mode}. Jarvis ships Ask, Plan and Agent.`);
 }
 
 function parseProfile(profile: string): PermissionProfileId {

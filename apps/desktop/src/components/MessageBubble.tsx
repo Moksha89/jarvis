@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Caption1, Tooltip, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ArrowClockwise20Regular, Copy20Regular, CheckmarkCircle20Regular } from '@fluentui/react-icons';
-import { jarvisRadius, jarvisSpacing } from '@jarvis/ui';
+import { StatusBadge, jarvisRadius, jarvisSpacing } from '@jarvis/ui';
 import type { ChatMessage } from '@jarvis/types';
 import { Markdown } from './Markdown.js';
 
@@ -17,6 +17,15 @@ const useStyles = makeStyles({
   assistant: { backgroundColor: tokens.colorNeutralBackground1 },
   meta: { display: 'flex', alignItems: 'center', gap: jarvisSpacing.xs, color: tokens.colorNeutralForeground3 },
   error: { color: tokens.colorPaletteRedForeground1 },
+  step: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: jarvisSpacing.xs,
+    padding: jarvisSpacing.s,
+    borderRadius: jarvisRadius.medium,
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  stepText: { color: tokens.colorNeutralForeground2 },
 });
 
 export interface MessageBubbleProps {
@@ -30,6 +39,15 @@ export function MessageBubble({ message, onRetry, retryLabel = 'Regenerate' }: M
   const styles = useStyles();
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
+
+  if (message.step) {
+    return (
+      <div className={styles.step}>
+        <StatusBadge tone={message.step.ok ? 'ok' : 'error'} label={message.step.ok ? 'Tool' : 'Tool failed'} />
+        <Caption1 className={styles.stepText}>{`${message.step.toolId} · ${message.step.summary}`}</Caption1>
+      </div>
+    );
+  }
 
   const copy = async () => {
     await navigator.clipboard.writeText(message.content);

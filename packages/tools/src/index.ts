@@ -1,4 +1,5 @@
 export * from './registry.js';
+export * from './functions.js';
 export * from './path-guard.js';
 export * from './shell-classify.js';
 export * from './filesystem.js';

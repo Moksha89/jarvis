@@ -1,7 +1,20 @@
-/** MVP chat modes. Agent/Build modes are deliberately out of scope for this milestone. */
-export type ChatMode = 'ask' | 'plan';
+/**
+ * Chat modes. Ask and Plan answer from the model alone; Agent lets the model
+ * drive tools, one permission-gated step at a time.
+ */
+export type ChatMode = 'ask' | 'plan' | 'agent';
 
-export type MessageRole = 'system' | 'user' | 'assistant';
+export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
+
+/** What one agent tool step did, kept alongside the `tool` message that shows it. */
+export interface ToolStepRecord {
+  toolId: string;
+  callId: string;
+  ok: boolean;
+  summary: string;
+  /** Truncated result text, for the collapsed card in the transcript. */
+  preview?: string;
+}
 
 export interface ChatMessage {
   id: string;
@@ -13,6 +26,8 @@ export interface ChatMessage {
   mode?: ChatMode;
   /** Set when generation was stopped or failed. */
   error?: string;
+  /** Present on `tool` messages produced by an agent run. */
+  step?: ToolStepRecord;
 }
 
 export interface Conversation {
@@ -34,5 +49,17 @@ export interface ChatRequest {
 export type ChatStreamEvent =
   | { type: 'start'; messageId: string; model: string }
   | { type: 'delta'; messageId: string; text: string }
+  | { type: 'step'; messageId: string; step: number; maxSteps: number }
+  | { type: 'tool-call'; messageId: string; toolId: string; callId: string; summary: string }
+  | { type: 'awaiting-approval'; messageId: string; callId: string; approvalId: string; summary: string }
+  | {
+      type: 'tool-result';
+      messageId: string;
+      toolId: string;
+      callId: string;
+      ok: boolean;
+      summary: string;
+      preview?: string;
+    }
   | { type: 'done'; messageId: string; content: string }
   | { type: 'error'; messageId: string; error: string };

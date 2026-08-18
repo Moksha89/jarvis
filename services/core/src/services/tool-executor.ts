@@ -20,6 +20,8 @@ interface ToolCallRow {
   decision_json: string;
   status: string;
   result_json: string | null;
+  task_id: string | null;
+  conversation_id: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -54,8 +56,6 @@ export const CONFIRMATION_PHRASE = 'I understand';
  * action is classified, gated by the permission engine and written to the audit log.
  */
 export class ToolExecutor {
-  private readonly pendingInputs = new Map<string, { toolId: string; input: unknown; options: ToolCallOptions }>();
-
   constructor(
     private readonly db: JarvisDatabase,
     private readonly registry: ToolRegistry,
@@ -118,7 +118,6 @@ export class ToolExecutor {
         decision,
         status: 'pending',
       };
-      this.pendingInputs.set(approval.id, { toolId, input, options });
       this.insertApproval(approval, record.id);
       this.bus.emit('tool.call.changed', record);
       this.bus.emit('approval.requested', approval);
@@ -126,6 +125,19 @@ export class ToolExecutor {
     }
 
     return await this.run(record, options);
+  }
+
+  /** The pending approval blocking a call, if the call is waiting for one. */
+  pendingApprovalForCall(callId: string): ApprovalRequest | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM approvals WHERE tool_call_id = ? AND status = 'pending' ORDER BY created_at DESC")
+      .get(callId) as ApprovalRow | undefined;
+    return row ? toApproval(row) : undefined;
+  }
+
+  getCall(id: string): ToolCallRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM tool_calls WHERE id = ?').get(id) as ToolCallRow | undefined;
+    return row ? toRecord(row) : undefined;
   }
 
   listPendingApprovals(): ApprovalRequest[] {
@@ -151,7 +163,8 @@ export class ToolExecutor {
     if (approval.decision.requiresConfirmationPhrase && options.confirmationPhrase?.trim() !== CONFIRMATION_PHRASE) {
       throw new Error(`This action needs the confirmation phrase "${CONFIRMATION_PHRASE}".`);
     }
-    const pending = this.pendingInputs.get(approvalId);
+    // The call row carries the original input, so an approval survives a Core restart.
+    const pending = this.getCallRow(row.tool_call_id);
     if (!pending) {
       throw new Error('The original request is no longer available. Ask Jarvis to try again.');
     }
@@ -166,7 +179,6 @@ export class ToolExecutor {
     }
 
     this.resolveApproval(approvalId, 'approved', createdRuleId);
-    this.pendingInputs.delete(approvalId);
     this.bus.emit('approval.resolved', {
       ...approval,
       status: 'approved',
@@ -174,11 +186,16 @@ export class ToolExecutor {
       createdRuleId,
     });
 
-    const record = this.getCall(row.tool_call_id);
-    if (!record) throw new Error(`Tool call ${row.tool_call_id} is missing.`);
-    const running: ToolCallRecord = { ...record, status: 'running', startedAt: new Date().toISOString() };
+    const running: ToolCallRecord = {
+      ...toRecord(pending),
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    };
     this.updateCall(running);
-    return await this.run(running, pending.options);
+    return await this.run(running, {
+      taskId: pending.task_id ?? undefined,
+      conversationId: pending.conversation_id ?? undefined,
+    });
   }
 
   async deny(approvalId: string, reason?: string): Promise<ToolCallRecord> {
@@ -188,11 +205,11 @@ export class ToolExecutor {
       throw new Error(`Approval ${approvalId} was already ${approval.status}.`);
     }
     this.resolveApproval(approvalId, 'denied');
-    this.pendingInputs.delete(approvalId);
     this.bus.emit('approval.resolved', { ...approval, status: 'denied', resolvedAt: new Date().toISOString() });
 
-    const record = this.getCall(row.tool_call_id);
-    if (!record) throw new Error(`Tool call ${row.tool_call_id} is missing.`);
+    const callRow = this.getCallRow(row.tool_call_id);
+    if (!callRow) throw new Error(`Tool call ${row.tool_call_id} is missing.`);
+    const record = toRecord(callRow);
     const denied: ToolCallRecord = {
       ...record,
       status: 'denied',
@@ -200,7 +217,10 @@ export class ToolExecutor {
       result: { ok: false, error: reason ?? 'You denied this action.', summary: `Denied: ${record.intent.summary}` },
     };
     this.updateCall(denied);
-    this.appendAudit(denied, 'denied', 0, {});
+    this.appendAudit(denied, 'denied', 0, {
+      taskId: callRow.task_id ?? undefined,
+      conversationId: callRow.conversation_id ?? undefined,
+    });
     this.bus.emit('tool.call.changed', denied);
     return denied;
   }
@@ -289,9 +309,8 @@ export class ToolExecutor {
       .run(record.status, record.result ? JSON.stringify(record.result) : null, record.finishedAt ?? null, record.id);
   }
 
-  private getCall(id: string): ToolCallRecord | undefined {
-    const row = this.db.prepare('SELECT * FROM tool_calls WHERE id = ?').get(id) as ToolCallRow | undefined;
-    return row ? toRecord(row) : undefined;
+  private getCallRow(id: string): ToolCallRow | undefined {
+    return this.db.prepare('SELECT * FROM tool_calls WHERE id = ?').get(id) as ToolCallRow | undefined;
   }
 
   private insertApproval(approval: ApprovalRequest, toolCallId: string): void {
