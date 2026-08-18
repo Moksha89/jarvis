@@ -2,10 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import type {
   AuditQuery,
+  DesktopElement,
+  DesktopShot,
+  DesktopWindow,
   KnowledgeCorpus,
   KnowledgeIndexProgress,
   PermissionProfileId,
   SavedTaskInput,
+  ToolCallRecord,
 } from '@jarvis/types';
 import type { CoreSettingsDto } from '@jarvis/core/client';
 import { coreClient } from './core-client.js';
@@ -149,6 +153,69 @@ export function useKnowledgeActions() {
   });
 
   return { addSource, removeSource, reindex, search };
+}
+
+/**
+ * Desktop control runs through the ordinary tool path, so a click or keystroke is
+ * classified, approved and audited exactly like a filesystem or shell call.
+ */
+export function useDesktopActions() {
+  const queryClient = useQueryClient();
+  const afterCall = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.toolCalls });
+  };
+
+  const windows = useMutation({
+    mutationFn: async (): Promise<DesktopWindow[]> =>
+      unwrapToolCall<DesktopWindow[]>(await coreClient.callTool('desktop.windows', {})) ?? [],
+    onSuccess: afterCall,
+  });
+  const inspect = useMutation({
+    mutationFn: async (handle: string): Promise<DesktopElement[]> =>
+      unwrapToolCall<DesktopElement[]>(await coreClient.callTool('desktop.inspect', { handle })) ?? [],
+    onSuccess: afterCall,
+  });
+  const screenshot = useMutation({
+    mutationFn: async (handle?: string): Promise<DesktopShot | undefined> =>
+      unwrapToolCall<DesktopShot>(await coreClient.callTool('desktop.screenshot', handle ? { handle } : {})),
+    onSuccess: afterCall,
+  });
+  const focus = useMutation({
+    mutationFn: (handle: string) => coreClient.callTool('desktop.focus', { handle }),
+    onSuccess: afterCall,
+  });
+  const click = useMutation({
+    mutationFn: ({ handle, element }: { handle: string; element: string }) =>
+      coreClient.callTool('desktop.click', { handle, element }),
+    onSuccess: afterCall,
+  });
+  const type = useMutation({
+    mutationFn: (text: string) => coreClient.callTool('desktop.type', { text }),
+    onSuccess: afterCall,
+  });
+  const keys = useMutation({
+    mutationFn: (value: string) => coreClient.callTool('desktop.keys', { keys: value }),
+    onSuccess: afterCall,
+  });
+
+  return { windows, inspect, screenshot, focus, click, type, keys };
+}
+
+/**
+ * A tool call that needs approval comes back pending with no data, and a refusal
+ * comes back with an error, so both have to surface instead of an empty result.
+ */
+function unwrapToolCall<T>(record: ToolCallRecord): T | undefined {
+  if (record.status === 'pending-approval') {
+    throw new Error('Waiting for your approval — confirm it in the shield at the top right, then try again.');
+  }
+  if (record.result && !record.result.ok) {
+    throw new Error(record.result.error ?? record.result.summary);
+  }
+  if (record.status !== 'succeeded') {
+    throw new Error(`The call ended as ${record.status}.`);
+  }
+  return record.result?.data as T | undefined;
 }
 
 export function useSettings() {

@@ -54,6 +54,7 @@ export interface CoreSettingsDto {
   embeddingModel: string;
   memoryEnabled: boolean;
   rememberConversations: boolean;
+  desktopControlEnabled: boolean;
 }
 
 /**

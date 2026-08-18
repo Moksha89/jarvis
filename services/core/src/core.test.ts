@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JarvisCore } from './core.js';
@@ -20,7 +20,8 @@ describe('JarvisCore tool gating and audit', () => {
   });
 
   it('registers the MVP tools', () => {
-    expect(core.listTools().map((tool) => tool.id)).toEqual([
+    const ids = core.listTools().map((tool) => tool.id);
+    expect(ids.filter((id) => !id.startsWith('desktop.'))).toEqual([
       'filesystem.delete',
       'filesystem.list',
       'filesystem.read',
@@ -29,6 +30,9 @@ describe('JarvisCore tool gating and audit', () => {
       'shell.classify',
       'shell.run',
     ]);
+    // The desktop tools drive Win32 and UI Automation, so they only exist on Windows.
+    const desktop = ids.filter((id) => id.startsWith('desktop.'));
+    expect(desktop.length > 0).toBe(platform() === 'win32');
   });
 
   it('reads a file inside an allowed scope and audits it', async () => {

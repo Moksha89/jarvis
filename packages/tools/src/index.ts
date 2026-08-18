@@ -5,3 +5,5 @@ export * from './shell-classify.js';
 export * from './filesystem.js';
 export * from './shell.js';
 export * from './recycle.js';
+export * from './desktop-bridge.js';
+export * from './desktop.js';

@@ -13,6 +13,12 @@ export interface JarvisSettings {
   memoryEnabled: boolean;
   /** Embed each finished chat turn so later conversations can recall it. */
   rememberConversations: boolean;
+  /**
+   * Let Jarvis move the mouse and keyboard. Reading the screen stays available
+   * either way; synthetic input is off until the user opts in, because a click
+   * lands wherever it lands and no folder scope can contain it.
+   */
+  desktopControlEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: JarvisSettings = {
@@ -25,6 +31,7 @@ export const DEFAULT_SETTINGS: JarvisSettings = {
   embeddingModel: 'nomic-embed-text',
   memoryEnabled: true,
   rememberConversations: true,
+  desktopControlEnabled: false,
 };
 
 export class SettingsStore {
