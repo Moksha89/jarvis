@@ -57,6 +57,13 @@ export async function waitForApproval(
     const onAbort = (): void => settleWith('The run was stopped before you answered.');
     options.signal?.addEventListener('abort', onAbort, { once: true });
 
+    // An already-aborted signal never fires again, so a run stopped while this call was
+    // still being submitted would otherwise wait for an answer nobody will ever give.
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
     if (options.timeoutMs !== undefined) {
       const seconds = Math.round(options.timeoutMs / 1000);
       timer = setTimeout(
