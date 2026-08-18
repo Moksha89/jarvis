@@ -125,8 +125,10 @@ time (`PathGuard`), so revoking a scope kills an already-approved call.
 `scripts/spike-computeruse/` is a standalone Rust binary (not wired into Core) that probes
 File Explorer, Windows Settings, Notepad, VS Code and Edge/Chrome through UI Automation
 (`windows-rs`) with a GDI screenshot fallback, and writes a per-app reliability report.
-See its [README](scripts/spike-computeruse/README.md). It compiles for Windows but has not
-been executed yet — run it on the target machine to get real numbers.
+See its [README](scripts/spike-computeruse/README.md). It has been run on Windows: all five
+apps were found, every subtree walk finished under 320 ms, and `ValuePattern.SetValue` wrote
+into Notepad — measured numbers and verdicts are in
+[REPORT.md](scripts/spike-computeruse/REPORT.md).
 
 ## Verification status
 
@@ -135,8 +137,19 @@ Verified on Linux CI-style checks: `pnpm install`, `pnpm -r typecheck`, `pnpm -r
 `pnpm lint`, the frontend production build, and `cargo check --target x86_64-pc-windows-gnu`
 for the spike.
 
-**Not yet verified** (needs a Windows 11 machine): `pnpm tauri dev` launching the shell,
-the Recycle Bin and PowerShell code paths, and the spike's actual UI Automation results.
+Verified on Windows (Windows Server 2022 x64, Node 22.14, Rust MSVC, VS 2022 Build Tools,
+WebView2, Ollama 0.32.14 + `qwen2.5:0.5b`): `pnpm tauri dev` launches the shell, all seven
+pages render, Ask and Plan mode stream, `filesystem.delete` lands the file in the Windows
+Recycle Bin (denied without a scope, approval-gated with one), and `shell.run`/`shell.classify`
+classify and gate PowerShell correctly (`Get-Date` → READ_ONLY/allow, `Remove-Item` →
+DESTRUCTIVE/ask, `format c:` → DANGEROUS/denied by profile). The spike numbers above are
+from that machine.
+
+**Known gap found during that run:** permission mutations (profile switch, rule and scope
+changes) are not written to the audit trail — `AuditStore.append` is only called from
+`ToolExecutor`, so `JarvisCore.setPermissionProfile`/`addPermissionRule`/`addPathScope`
+leave no record. Also, pending approvals live in an in-memory map while the approval row is
+persisted, so restarting Core orphans a pending approval permanently.
 
 ## Out of scope for this milestone
 

@@ -1,9 +1,29 @@
 # Computer-use feasibility - method and expected findings
 
-Status: **the probe compiles for Windows but has not yet been run on Windows hardware.**
-Run `cargo run --release` on the target machine; it writes the authoritative
-`out/REPORT.md` with measured numbers. This file describes what is measured and what we
-expect, so the real report can be read as a confirmation or a contradiction.
+Status: **measured on Windows (Windows Server 2022 x64, `cargo run --release -- --allow-input`).**
+Each run rewrites `out/REPORT.md` (git-ignored) with the machine's own numbers; the table
+below records the first real run so the hypotheses can be read as confirmed or refuted.
+
+## Measured run
+
+| App | Window | UIA elements | With AutomationId | Invokable | Edit fields | Tree walk | Screenshot | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| File Explorer | found | 101 | 44 | 23 | 17 | 319 ms | ok | go |
+| Windows Settings | found | 40 | 16 | 11 | 1 | 189 ms | ok | go |
+| Notepad | found | 27 | 10 | 7 | 1 | 300 ms | ok | partial |
+| Visual Studio Code | found | 13 | 0 | 3 | 0 | 67 ms | ok | partial |
+| Chrome / Edge | found | 46 | 2 | 16 | 1 | 81 ms | ok | partial |
+
+Verdict for the MVP: **UI Automation is viable.** All five windows were found, every
+subtree walk finished well under the 2 s budget, GDI screenshots captured for all five,
+and `ValuePattern.SetValue` wrote text into Notepad's edit control on the first attempt.
+Nothing came back no-go, so "operate Windows" does not need a per-app adapter zoo.
+
+The refuted hypothesis is Notepad: it landed on `partial`, not `go`, because only 10 of
+its 27 elements carry an `AutomationId` (below the 40% bar) even though writing to it
+works. The Chromium-based apps (VS Code, Chrome/Edge) expose a tree but almost no
+`AutomationId`s, so those two need the screenshot + coordinate fallback the spike
+predicted.
 
 ## Decision rule
 
