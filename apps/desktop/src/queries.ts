@@ -2,6 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import type {
   AuditQuery,
+  BrowserPageInfo,
+  BrowserShot,
+  BrowserSnapshot,
   DesktopElement,
   DesktopShot,
   DesktopWindow,
@@ -181,24 +184,68 @@ export function useDesktopActions() {
     onSuccess: afterCall,
   });
   const focus = useMutation({
-    mutationFn: (handle: string) => coreClient.callTool('desktop.focus', { handle }),
+    mutationFn: async (handle: string) => unwrapToolCall(await coreClient.callTool('desktop.focus', { handle })),
     onSuccess: afterCall,
   });
   const click = useMutation({
-    mutationFn: ({ handle, element }: { handle: string; element: string }) =>
-      coreClient.callTool('desktop.click', { handle, element }),
+    mutationFn: async ({ handle, element }: { handle: string; element: string }) =>
+      unwrapToolCall(await coreClient.callTool('desktop.click', { handle, element })),
     onSuccess: afterCall,
   });
   const type = useMutation({
-    mutationFn: (text: string) => coreClient.callTool('desktop.type', { text }),
+    mutationFn: async (text: string) => unwrapToolCall(await coreClient.callTool('desktop.type', { text })),
     onSuccess: afterCall,
   });
   const keys = useMutation({
-    mutationFn: (value: string) => coreClient.callTool('desktop.keys', { keys: value }),
+    mutationFn: async (value: string) => unwrapToolCall(await coreClient.callTool('desktop.keys', { keys: value })),
     onSuccess: afterCall,
   });
 
   return { windows, inspect, screenshot, focus, click, type, keys };
+}
+
+/**
+ * Browsing runs through the same tool path: opening and reading a page are low
+ * risk, while clicking and filling in a form need the browser control switch.
+ */
+export function useBrowserActions() {
+  const queryClient = useQueryClient();
+  const afterCall = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.toolCalls });
+  };
+
+  const open = useMutation({
+    mutationFn: async (url: string): Promise<BrowserPageInfo | undefined> =>
+      unwrapToolCall<BrowserPageInfo>(await coreClient.callTool('browser.open', { url })),
+    onSuccess: afterCall,
+  });
+  const read = useMutation({
+    mutationFn: async (): Promise<BrowserSnapshot | undefined> =>
+      unwrapToolCall<BrowserSnapshot>(await coreClient.callTool('browser.read', {})),
+    onSuccess: afterCall,
+  });
+  const screenshot = useMutation({
+    mutationFn: async (fullPage: boolean): Promise<BrowserShot | undefined> =>
+      unwrapToolCall<BrowserShot>(await coreClient.callTool('browser.screenshot', { fullPage })),
+    onSuccess: afterCall,
+  });
+  const click = useMutation({
+    mutationFn: async (target: string) => unwrapToolCall(await coreClient.callTool('browser.click', { target })),
+    onSuccess: afterCall,
+  });
+  const type = useMutation({
+    mutationFn: async ({ target, text, submit }: { target: string; text: string; submit: boolean }) =>
+      unwrapToolCall(
+        await coreClient.callTool('browser.type', { target: target === '' ? undefined : target, text, submit }),
+      ),
+    onSuccess: afterCall,
+  });
+  const close = useMutation({
+    mutationFn: async () => unwrapToolCall(await coreClient.callTool('browser.close', {})),
+    onSuccess: afterCall,
+  });
+
+  return { open, read, screenshot, click, type, close };
 }
 
 /**

@@ -7,6 +7,7 @@ export type PageId =
   | 'tasks'
   | 'knowledge'
   | 'screen'
+  | 'web'
   | 'models'
   | 'permissions'
   | 'activity'

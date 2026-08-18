@@ -15,7 +15,8 @@
   },
   "dependencies": {
     "@jarvis/types": "workspace:*",
-    "@jarvis/permissions": "workspace:*"
+    "@jarvis/permissions": "workspace:*",
+    "playwright-core": "1.62.1"
   },
   "devDependencies": {
     "@types/node": "22.10.2",

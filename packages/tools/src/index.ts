@@ -7,3 +7,5 @@ export * from './shell.js';
 export * from './recycle.js';
 export * from './desktop-bridge.js';
 export * from './desktop.js';
+export * from './browser-bridge.js';
+export * from './browser.js';

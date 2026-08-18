@@ -29,7 +29,14 @@ import type {
 } from '@jarvis/types';
 import { EventBus } from '@jarvis/events';
 import { PermissionEngine } from '@jarvis/permissions';
-import { createDesktopTools, createFilesystemTools, createPathGuard, createShellTools, ToolRegistry } from '@jarvis/tools';
+import {
+  createBrowserTools,
+  createDesktopTools,
+  createFilesystemTools,
+  createPathGuard,
+  createShellTools,
+  ToolRegistry,
+} from '@jarvis/tools';
 import { OllamaAdapter, QwenCodeAgentAdapter, StubAgentAdapter } from '@jarvis/adapters';
 import { openDatabase, type JarvisDatabase } from './db/database.js';
 import { AuditStore } from './store/audit-store.js';
@@ -112,7 +119,15 @@ export class JarvisCore {
       platform() === 'win32'
         ? createDesktopTools({ controlEnabled: () => this.settingsStore.getAll().desktopControlEnabled })
         : [];
-    for (const tool of [...createFilesystemTools(guard), ...createShellTools(guard), ...desktopTools]) {
+    const browserTools = createBrowserTools({
+      controlEnabled: () => this.settingsStore.getAll().browserControlEnabled,
+    });
+    for (const tool of [
+      ...createFilesystemTools(guard),
+      ...createShellTools(guard),
+      ...desktopTools,
+      ...browserTools,
+    ]) {
       this.registry.register(tool);
     }
 
