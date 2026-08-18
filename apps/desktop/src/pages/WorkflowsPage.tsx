@@ -76,6 +76,8 @@ export function WorkflowsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [runInput, setRunInput] = useState<Record<string, string>>({});
   const [jsonError, setJsonError] = useState<string | null>(null);
+  /** The tool-arguments box being typed in, kept as raw text so half-written JSON survives. */
+  const [rawJson, setRawJson] = useState<{ index: number; text: string } | null>(null);
 
   const error =
     jsonError ??
@@ -87,9 +89,13 @@ export function WorkflowsPage() {
       null);
   const steps = draft.steps as WorkflowStepInput[];
 
-  const setSteps = (next: WorkflowStepInput[]) => setDraft({ ...draft, steps: next });
+  const setSteps = (next: WorkflowStepInput[]) => {
+    setRawJson(null);
+    setJsonError(null);
+    setDraft({ ...draft, steps: next });
+  };
   const patchStep = (index: number, patch: Partial<WorkflowStepInput>) =>
-    setSteps(steps.map((step, position) => (position === index ? { ...step, ...patch } : step)));
+    setDraft({ ...draft, steps: steps.map((step, position) => (position === index ? { ...step, ...patch } : step)) });
   const move = (index: number, delta: number) => {
     const target = index + delta;
     if (target < 0 || target >= steps.length) return;
@@ -103,6 +109,7 @@ export function WorkflowsPage() {
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
     setJsonError(null);
+    setRawJson(null);
   };
 
   const submit = () => {
@@ -117,6 +124,7 @@ export function WorkflowsPage() {
   const edit = (workflow: Workflow) => {
     setEditingId(workflow.id);
     setJsonError(null);
+    setRawJson(null);
     setDraft({
       name: workflow.name,
       description: workflow.description ?? '',
@@ -223,10 +231,13 @@ export function WorkflowsPage() {
                 <div className={styles.field}>
                   <Label>Tool input (JSON)</Label>
                   <Textarea
-                    value={JSON.stringify(step.input ?? {}, null, 2)}
+                    value={rawJson?.index === index ? rawJson.text : JSON.stringify(step.input ?? {}, null, 2)}
                     onChange={(_, data) => {
+                      // The text is echoed back verbatim; the step only takes the parsed value
+                      // once it is a JSON object, so typing through invalid states works.
+                      setRawJson({ index, text: data.value });
                       try {
-                        const parsed: unknown = JSON.parse(data.value === '' ? '{}' : data.value);
+                        const parsed: unknown = JSON.parse(data.value.trim() === '' ? '{}' : data.value);
                         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
                           setJsonError('Tool input must be a JSON object.');
                           return;
@@ -295,7 +306,11 @@ export function WorkflowsPage() {
           >
             Add step
           </Button>
-          <Button appearance="primary" onClick={submit} disabled={actions.create.isPending || actions.update.isPending}>
+          <Button
+            appearance="primary"
+            onClick={submit}
+            disabled={jsonError !== null || actions.create.isPending || actions.update.isPending}
+          >
             {editingId ? 'Save changes' : 'Create workflow'}
           </Button>
           {editingId ? <Button onClick={reset}>Cancel</Button> : null}

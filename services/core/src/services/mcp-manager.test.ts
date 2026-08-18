@@ -198,6 +198,61 @@ describe('McpManager', () => {
     expect(slowServer.closed).toBe(true);
     expect(registry.get('mcp.slow.read_file')).toBeUndefined();
   });
+
+  it('leaves no tools behind when a server is switched off while it is still starting', async () => {
+    const stored = store.create({ name: 'slow', command: 'fake', args: [], trust: 'normal' });
+    const slowServer = new FakeServer([{ name: 'read_file' }]);
+    let release: () => void = () => undefined;
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = new McpManager({
+      store,
+      registry,
+      bus,
+      connect: async () => {
+        await opened;
+        return slowServer;
+      },
+    });
+
+    const starting = slow.start();
+    const disabling = slow.setEnabled(stored.id, false);
+    release();
+    const [, off] = await Promise.all([starting, disabling]);
+
+    expect(off.connected).toBe(false);
+    expect(off.tools).toHaveLength(0);
+    expect(registry.get('mcp.slow.read_file')).toBeUndefined();
+    expect(slowServer.closed).toBe(true);
+  });
+
+  it('leaves no tools behind when a server is removed while it is still starting', async () => {
+    const stored = store.create({ name: 'slow', command: 'fake', args: [], trust: 'normal' });
+    const slowServer = new FakeServer([{ name: 'read_file' }]);
+    let release: () => void = () => undefined;
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = new McpManager({
+      store,
+      registry,
+      bus,
+      connect: async () => {
+        await opened;
+        return slowServer;
+      },
+    });
+
+    const starting = slow.start();
+    const removing = slow.remove(stored.id);
+    release();
+    await Promise.all([starting, removing]);
+
+    expect(store.list()).toHaveLength(0);
+    expect(registry.get('mcp.slow.read_file')).toBeUndefined();
+    expect(slowServer.closed).toBe(true);
+  });
 });
 
 describe('skill server tools', () => {

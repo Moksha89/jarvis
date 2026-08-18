@@ -61,6 +61,8 @@ export class McpManager {
   private readonly sessions = new Map<string, Session>();
   /** Connections still being opened: they have no session to close yet. */
   private readonly starting = new Map<string, Promise<void>>();
+  /** Bumped whenever a server is closed, so a startup that lost its race discards itself. */
+  private readonly startEpoch = new Map<string, number>();
   private stopped = false;
   private readonly connect: McpConnect;
 
@@ -116,7 +118,9 @@ export class McpManager {
   }
 
   private async open(server: StoredMcpServer): Promise<void> {
-    const opening = this.spawn(server);
+    const epoch = (this.startEpoch.get(server.id) ?? 0) + 1;
+    this.startEpoch.set(server.id, epoch);
+    const opening = this.spawn(server, epoch);
     this.starting.set(server.id, opening);
     try {
       await opening;
@@ -125,7 +129,7 @@ export class McpManager {
     }
   }
 
-  private async spawn(server: StoredMcpServer): Promise<void> {
+  private async spawn(server: StoredMcpServer, epoch: number): Promise<void> {
     if (!server.enabled) {
       this.sessions.set(server.id, { toolIds: [], tools: [], connected: false });
       return;
@@ -136,7 +140,7 @@ export class McpManager {
     try {
       client = await this.connect(server);
       const listed = await client.listTools();
-      if (this.stopped) {
+      if (this.stopped || this.startEpoch.get(server.id) !== epoch) {
         await closeQuietly(client);
         this.sessions.set(server.id, { toolIds: [], tools: [], connected: false });
         return;
@@ -164,7 +168,16 @@ export class McpManager {
     }
   }
 
+  /**
+   * Closing while a startup is still in flight: bumping the epoch makes that startup
+   * throw its own connection away instead of registering tools for a server the user
+   * just switched off or removed, and waiting for it means its child process is gone
+   * by the time this returns.
+   */
   private async close(id: string): Promise<void> {
+    this.startEpoch.set(id, (this.startEpoch.get(id) ?? 0) + 1);
+    const starting = this.starting.get(id);
+    if (starting) await starting;
     const session = this.sessions.get(id);
     if (!session) return;
     for (const toolId of session.toolIds) {
