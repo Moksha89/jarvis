@@ -7,6 +7,7 @@ import type {
   PermissionRule,
   RiskLevel,
   SavedTaskInput,
+  WorkflowInput,
 } from '@jarvis/types';
 
 export const CORE_DEFAULT_PORT = 47821;
@@ -79,6 +80,16 @@ export type AddSkillServerBody = McpServerInput;
 
 export interface SetSkillServerEnabledBody {
   enabled: boolean;
+}
+
+export type WorkflowBody = WorkflowInput;
+
+export interface SetWorkflowEnabledBody {
+  enabled: boolean;
+}
+
+export interface RunWorkflowBody {
+  input?: string;
 }
 
 export interface SetProfileBody {

@@ -5,6 +5,7 @@ export type PageId =
   | 'home'
   | 'chat'
   | 'tasks'
+  | 'workflows'
   | 'knowledge'
   | 'screen'
   | 'web'

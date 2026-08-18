@@ -28,6 +28,9 @@ import type {
   Task,
   TaskRun,
   ToolCallRecord,
+  Workflow,
+  WorkflowInput,
+  WorkflowRun,
 } from '@jarvis/types';
 import { EventBus } from '@jarvis/events';
 import { PermissionEngine } from '@jarvis/permissions';
@@ -48,6 +51,7 @@ import { KnowledgeStore } from './store/knowledge-store.js';
 import { McpStore } from './store/mcp-store.js';
 import { PermissionStore } from './store/permission-store.js';
 import { SavedTaskStore } from './store/saved-task-store.js';
+import { WorkflowStore } from './store/workflow-store.js';
 import { DEFAULT_SETTINGS, SettingsStore, type JarvisSettings } from './store/settings-store.js';
 import { AgentRunner } from './services/agent-runner.js';
 import { ChatService } from './services/chat-service.js';
@@ -58,6 +62,7 @@ import { ModelRouter } from './services/model-router.js';
 import { TaskManager } from './services/task-manager.js';
 import { TaskScheduler } from './services/task-scheduler.js';
 import { ToolExecutor, type ApproveOptions, type ToolCallOptions } from './services/tool-executor.js';
+import { WorkflowRunner } from './services/workflow-runner.js';
 
 export const CORE_VERSION = '0.1.0';
 
@@ -110,6 +115,8 @@ export class JarvisCore {
   private readonly browserBridge = new PlaywrightBrowserBridge();
   private readonly mcpStore: McpStore;
   private readonly mcp: McpManager;
+  private readonly workflowStore: WorkflowStore;
+  private readonly workflows: WorkflowRunner;
   private readonly startedAt = Date.now();
 
   constructor(options: JarvisCoreOptions = {}) {
@@ -213,6 +220,28 @@ export class JarvisCore {
     if (options.enableSkillServers !== false) {
       void this.mcp.start();
     }
+
+    this.workflowStore = new WorkflowStore(this.db);
+    this.workflows = new WorkflowRunner({
+      store: this.workflowStore,
+      conversations: this.conversationStore,
+      registry: this.registry,
+      executor: this.executor,
+      bus: this.bus,
+      // A prompt step is an ordinary chat turn, so a workflow cannot reach the model
+      // any differently from a person typing the same thing.
+      runTurn: (invocation) =>
+        this.chat.send({
+          conversationId: invocation.conversationId,
+          content: invocation.prompt,
+          mode: invocation.mode,
+          model: invocation.model,
+          maxSteps: invocation.maxSteps,
+          signal: invocation.signal,
+          unattended: true,
+        }),
+    });
+    this.workflows.recover();
   }
 
   // ---------------------------------------------------------------- system
@@ -356,6 +385,53 @@ export class JarvisCore {
 
   listTaskRuns(options: { taskId?: string; limit?: number } = {}): TaskRun[] {
     return this.savedTasks.listRuns(options);
+  }
+
+  // ---------------------------------------------------------------- workflows
+
+  listWorkflows(): Workflow[] {
+    return this.workflowStore.list();
+  }
+
+  createWorkflow(input: WorkflowInput): Workflow {
+    const created = this.workflowStore.create(input);
+    this.bus.emit('workflow.changed', created);
+    return created;
+  }
+
+  updateWorkflow(id: string, input: WorkflowInput): Workflow {
+    const updated = this.workflowStore.update(id, input);
+    this.bus.emit('workflow.changed', updated);
+    return updated;
+  }
+
+  setWorkflowEnabled(id: string, enabled: boolean): Workflow {
+    const updated = this.workflowStore.setEnabled(id, enabled);
+    this.bus.emit('workflow.changed', updated);
+    return updated;
+  }
+
+  deleteWorkflow(id: string): void {
+    // Stop the work first: deleting the rows under a live run leaves it writing to nothing.
+    this.workflows.cancelRunsForWorkflow(id);
+    this.workflowStore.delete(id);
+    this.bus.emit('workflow.deleted', { id });
+  }
+
+  runWorkflow(id: string, input?: string): WorkflowRun {
+    return this.workflows.runNow(id, input);
+  }
+
+  cancelWorkflowRun(runId: string): WorkflowRun {
+    return this.workflows.cancelRun(runId);
+  }
+
+  listWorkflowRuns(options: { workflowId?: string; limit?: number } = {}): WorkflowRun[] {
+    return this.workflowStore.listRuns(options);
+  }
+
+  getWorkflowRun(runId: string): WorkflowRun | undefined {
+    return this.workflowStore.getRun(runId);
   }
 
   // ---------------------------------------------------------------- knowledge
@@ -547,6 +623,7 @@ export class JarvisCore {
    */
   async close(): Promise<void> {
     this.scheduler.stop();
+    this.workflows.stop();
     await Promise.allSettled([this.browserBridge.close(), this.mcp.stop()]);
     this.bus.clear();
     this.db.close();

@@ -199,6 +199,32 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
+
+-- Workflows are fixed recipes: the steps are stored as written, and every run keeps its
+-- own step results so the trail survives a later edit of the workflow.
+CREATE TABLE IF NOT EXISTS workflows (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  steps_json TEXT NOT NULL,
+  model TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  input TEXT,
+  conversation_id TEXT,
+  steps_json TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow ON workflow_runs(workflow_id, started_at DESC);
 `;
 
 /**

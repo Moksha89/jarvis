@@ -11,6 +11,8 @@ import type {
   Task,
   TaskRun,
   ToolCallRecord,
+  Workflow,
+  WorkflowRun,
 } from '@jarvis/types';
 
 /** The single event vocabulary shared by Core, adapters and the UI. */
@@ -26,6 +28,9 @@ export interface JarvisEventMap {
   'knowledge.source.deleted': { id: string };
   'mcp.server.changed': McpServer;
   'mcp.server.deleted': { id: string };
+  'workflow.changed': Workflow;
+  'workflow.deleted': { id: string };
+  'workflow.run.changed': WorkflowRun;
   'tool.call.changed': ToolCallRecord;
   'approval.requested': ApprovalRequest;
   'approval.resolved': ApprovalRequest;

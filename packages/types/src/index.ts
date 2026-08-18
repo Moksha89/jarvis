@@ -11,3 +11,4 @@ export * from './system.js';
 export * from './desktop.js';
 export * from './browser.js';
 export * from './mcp.js';
+export * from './workflow.js';
