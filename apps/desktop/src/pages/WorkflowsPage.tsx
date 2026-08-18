@@ -75,9 +75,18 @@ export function WorkflowsPage() {
   const [draft, setDraft] = useState<WorkflowInput>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [runInput, setRunInput] = useState<Record<string, string>>({});
-  const [jsonError, setJsonError] = useState<string | null>(null);
-  /** The tool-arguments box being typed in, kept as raw text so half-written JSON survives. */
-  const [rawJson, setRawJson] = useState<{ index: number; text: string } | null>(null);
+  /**
+   * Per step, the raw text of its tool-arguments box plus whatever is wrong with it, so
+   * half-written JSON survives typing and one step's mistake cannot discard another's.
+   */
+  const [jsonEdits, setJsonEdits] = useState<Record<number, { text: string; error: string | null }>>({});
+
+  const steps = draft.steps as WorkflowStepInput[];
+  /** Only a tool step can have unusable arguments, so switching a step to a prompt clears its complaint. */
+  const jsonError =
+    Object.entries(jsonEdits).find(
+      ([position, edit]) => edit.error !== null && steps[Number(position)]?.kind === 'tool',
+    )?.[1].error ?? null;
 
   const error =
     jsonError ??
@@ -87,11 +96,10 @@ export function WorkflowsPage() {
       actions.cancelRun.error ??
       actions.remove.error ??
       null);
-  const steps = draft.steps as WorkflowStepInput[];
 
   const setSteps = (next: WorkflowStepInput[]) => {
-    setRawJson(null);
-    setJsonError(null);
+    // Positions shift when steps are added, removed or moved, so the raw text is re-derived.
+    setJsonEdits({});
     setDraft({ ...draft, steps: next });
   };
   const patchStep = (index: number, patch: Partial<WorkflowStepInput>) =>
@@ -108,12 +116,10 @@ export function WorkflowsPage() {
   const reset = () => {
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
-    setJsonError(null);
-    setRawJson(null);
+    setJsonEdits({});
   };
 
   const submit = () => {
-    setJsonError(null);
     if (editingId) {
       actions.update.mutate({ id: editingId, input: draft }, { onSuccess: reset });
       return;
@@ -123,8 +129,7 @@ export function WorkflowsPage() {
 
   const edit = (workflow: Workflow) => {
     setEditingId(workflow.id);
-    setJsonError(null);
-    setRawJson(null);
+    setJsonEdits({});
     setDraft({
       name: workflow.name,
       description: workflow.description ?? '',
@@ -231,21 +236,22 @@ export function WorkflowsPage() {
                 <div className={styles.field}>
                   <Label>Tool input (JSON)</Label>
                   <Textarea
-                    value={rawJson?.index === index ? rawJson.text : JSON.stringify(step.input ?? {}, null, 2)}
+                    value={jsonEdits[index]?.text ?? JSON.stringify(step.input ?? {}, null, 2)}
                     onChange={(_, data) => {
                       // The text is echoed back verbatim; the step only takes the parsed value
                       // once it is a JSON object, so typing through invalid states works.
-                      setRawJson({ index, text: data.value });
+                      const noteEdit = (error: string | null) =>
+                        setJsonEdits((current) => ({ ...current, [index]: { text: data.value, error } }));
                       try {
                         const parsed: unknown = JSON.parse(data.value.trim() === '' ? '{}' : data.value);
                         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-                          setJsonError('Tool input must be a JSON object.');
+                          noteEdit('Tool input must be a JSON object.');
                           return;
                         }
-                        setJsonError(null);
+                        noteEdit(null);
                         patchStep(index, { input: parsed as Record<string, unknown> });
                       } catch {
-                        setJsonError('That tool input is not valid JSON yet.');
+                        noteEdit('That tool input is not valid JSON yet.');
                       }
                     }}
                   />
