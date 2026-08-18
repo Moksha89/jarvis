@@ -4,6 +4,7 @@ import {
   Chat24Regular,
   Cube24Regular,
   Desktop24Regular,
+  FlowchartCircle24Regular,
   Globe24Regular,
   History24Regular,
   Home24Regular,
@@ -21,6 +22,7 @@ import { SystemStrip } from './components/SystemStrip.js';
 import { HomePage } from './pages/HomePage.js';
 import { ChatPage } from './pages/ChatPage.js';
 import { TasksPage } from './pages/TasksPage.js';
+import { WorkflowsPage } from './pages/WorkflowsPage.js';
 import { ModelsPage } from './pages/ModelsPage.js';
 import { KnowledgePage } from './pages/KnowledgePage.js';
 import { ScreenPage } from './pages/ScreenPage.js';
@@ -34,6 +36,7 @@ const navItems: readonly (NavItem & { id: PageId })[] = [
   { id: 'home', label: 'Home', icon: <Home24Regular /> },
   { id: 'chat', label: 'Chat', icon: <Chat24Regular /> },
   { id: 'tasks', label: 'Tasks', icon: <TaskListSquareLtr24Regular /> },
+  { id: 'workflows', label: 'Workflows', icon: <FlowchartCircle24Regular /> },
   { id: 'knowledge', label: 'Knowledge', icon: <Library24Regular /> },
   { id: 'screen', label: 'Screen', icon: <Desktop24Regular /> },
   { id: 'web', label: 'Web', icon: <Globe24Regular /> },
@@ -48,6 +51,7 @@ const pages: Record<PageId, () => JSX.Element> = {
   home: HomePage,
   chat: ChatPage,
   tasks: TasksPage,
+  workflows: WorkflowsPage,
   knowledge: KnowledgePage,
   screen: ScreenPage,
   web: WebPage,

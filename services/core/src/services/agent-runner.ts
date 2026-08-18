@@ -10,6 +10,7 @@ import { TASK_LIMITS } from '@jarvis/types';
 import type { EventBus } from '@jarvis/events';
 import { normalizeToolArguments, toModelToolDefinition, toolIdForFunctionName } from '@jarvis/tools';
 import type { ToolRegistry } from '@jarvis/tools';
+import { waitForApproval } from './approval-wait.js';
 import type { ToolExecutor } from './tool-executor.js';
 
 /** Tool output handed back to the model, capped so small local models keep their context. */
@@ -189,48 +190,11 @@ export class AgentRunner {
     approvalId: string | undefined,
     options: AgentRunOptions,
   ): Promise<ToolCallRecord> {
-    if (!approvalId) {
-      return record;
-    }
-    const timeoutMs = options.unattended
-      ? (options.approvalTimeoutMs ?? TASK_LIMITS.unattendedApprovalTimeoutMs)
-      : undefined;
-
-    return await new Promise<ToolCallRecord>((resolve) => {
-      let settled = false;
-      let timer: NodeJS.Timeout | undefined;
-
-      const finish = (value: ToolCallRecord): void => {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        unsubscribe();
-        options.signal?.removeEventListener('abort', onAbort);
-        resolve(value);
-      };
-
-      const unsubscribe = this.bus.on('tool.call.changed', (changed) => {
-        if (changed.id !== record.id) return;
-        if (changed.status === 'pending-approval' || changed.status === 'running') return;
-        finish(changed);
-      });
-
-      const onAbort = (): void => {
-        void this.executor
-          .deny(approvalId, 'The run was stopped before you answered.')
-          .then(finish)
-          .catch(() => finish(this.executor.getCall(record.id) ?? record));
-      };
-      options.signal?.addEventListener('abort', onAbort, { once: true });
-
-      if (timeoutMs !== undefined) {
-        timer = setTimeout(() => {
-          void this.executor
-            .deny(approvalId, `Nobody answered this approval within ${Math.round(timeoutMs / 1000)}s, so it was denied.`)
-            .then(finish)
-            .catch(() => finish(this.executor.getCall(record.id) ?? record));
-        }, timeoutMs);
-      }
+    return await waitForApproval(this.executor, this.bus, record, approvalId, {
+      signal: options.signal,
+      timeoutMs: options.unattended
+        ? (options.approvalTimeoutMs ?? TASK_LIMITS.unattendedApprovalTimeoutMs)
+        : undefined,
     });
   }
 }

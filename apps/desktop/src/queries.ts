@@ -14,6 +14,7 @@ import type {
   PermissionProfileId,
   SavedTaskInput,
   ToolCallRecord,
+  WorkflowInput,
 } from '@jarvis/types';
 import type { CoreSettingsDto } from '@jarvis/core/client';
 import { coreClient } from './core-client.js';
@@ -36,6 +37,8 @@ export const queryKeys = {
   knowledgeStats: ['knowledge', 'stats'] as const,
   knowledgeDocuments: (sourceId: string) => ['knowledge', 'documents', sourceId] as const,
   skillServers: ['skills', 'servers'] as const,
+  workflows: ['workflows'] as const,
+  workflowRuns: ['workflow-runs'] as const,
 };
 
 export function useSystemStatus() {
@@ -97,6 +100,44 @@ export function useSavedTaskActions() {
   const remove = useMutation({ mutationFn: (id: string) => coreClient.deleteSavedTask(id), onSuccess: invalidate });
   const runNow = useMutation({ mutationFn: (id: string) => coreClient.runSavedTask(id), onSuccess: invalidate });
   const cancelRun = useMutation({ mutationFn: (runId: string) => coreClient.cancelTaskRun(runId), onSuccess: invalidate });
+
+  return { create, update, setEnabled, remove, runNow, cancelRun };
+}
+
+export function useWorkflows() {
+  return useQuery({ queryKey: queryKeys.workflows, queryFn: () => coreClient.listWorkflows() });
+}
+
+export function useWorkflowRuns(workflowId?: string) {
+  return useQuery({
+    queryKey: [...queryKeys.workflowRuns, workflowId ?? 'all'] as const,
+    queryFn: () => coreClient.listWorkflowRuns({ workflowId, limit: 50 }),
+  });
+}
+
+/** Workflow mutations refresh the definitions and their run history together. */
+export function useWorkflowActions() {
+  const queryClient = useQueryClient();
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRuns });
+  };
+
+  const create = useMutation({ mutationFn: (input: WorkflowInput) => coreClient.createWorkflow(input), onSuccess: invalidate });
+  const update = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: WorkflowInput }) => coreClient.updateWorkflow(id, input),
+    onSuccess: invalidate,
+  });
+  const setEnabled = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => coreClient.setWorkflowEnabled(id, enabled),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({ mutationFn: (id: string) => coreClient.deleteWorkflow(id), onSuccess: invalidate });
+  const runNow = useMutation({
+    mutationFn: ({ id, input }: { id: string; input?: string }) => coreClient.runWorkflow(id, input),
+    onSuccess: invalidate,
+  });
+  const cancelRun = useMutation({ mutationFn: (runId: string) => coreClient.cancelWorkflowRun(runId), onSuccess: invalidate });
 
   return { create, update, setEnabled, remove, runNow, cancelRun };
 }
@@ -410,6 +451,14 @@ export function useCoreEvents(): void {
         case 'mcp.server.deleted':
           void queryClient.invalidateQueries({ queryKey: queryKeys.skillServers });
           void queryClient.invalidateQueries({ queryKey: queryKeys.tools });
+          break;
+        case 'workflow.changed':
+        case 'workflow.deleted':
+          void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+          break;
+        case 'workflow.run.changed':
+          void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRuns });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
           break;
         case 'knowledge.index.progress':
           // One event per file: refetching here would re-query Core (and Ollama, for

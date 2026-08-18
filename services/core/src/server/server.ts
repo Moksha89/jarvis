@@ -18,6 +18,9 @@ import {
   type SetProfileBody,
   type SetSkillServerEnabledBody,
   type SetTaskEnabledBody,
+  type SetWorkflowEnabledBody,
+  type RunWorkflowBody,
+  type WorkflowBody,
 } from '../client/contract.js';
 import { Router, type RequestContext } from './router.js';
 import type { JarvisSettings } from '../store/settings-store.js';
@@ -377,6 +380,40 @@ function buildRouter(core: JarvisCore): Router {
     await core.deleteSkillServer(ctx.params.id as string);
     ctx.send(200, { ok: true });
   });
+
+  router.get('/api/workflows', (ctx) => ctx.send(200, core.listWorkflows()));
+  router.post('/api/workflows', async (ctx) => {
+    const body = await ctx.json<WorkflowBody>();
+    ctx.send(200, core.createWorkflow(body));
+  });
+  router.patch('/api/workflows/:id', async (ctx) => {
+    const body = await ctx.json<WorkflowBody>();
+    ctx.send(200, core.updateWorkflow(ctx.params.id as string, body));
+  });
+  router.post('/api/workflows/:id/enabled', async (ctx) => {
+    const body = await ctx.json<SetWorkflowEnabledBody>();
+    ctx.send(200, core.setWorkflowEnabled(ctx.params.id as string, body.enabled === true));
+  });
+  router.post('/api/workflows/:id/run', async (ctx) => {
+    const body = await ctx.json<RunWorkflowBody>();
+    ctx.send(200, core.runWorkflow(ctx.params.id as string, body.input));
+  });
+  router.delete('/api/workflows/:id', (ctx) => {
+    core.deleteWorkflow(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+  router.get('/api/workflows/runs', (ctx) =>
+    ctx.send(
+      200,
+      core.listWorkflowRuns({
+        workflowId: ctx.query.get('workflowId') ?? undefined,
+        limit: numberParam(ctx, 'limit'),
+      }),
+    ),
+  );
+  router.post('/api/workflows/runs/:id/cancel', (ctx) =>
+    ctx.send(200, core.cancelWorkflowRun(ctx.params.id as string)),
+  );
 
   router.get('/api/audit', (ctx) => ctx.send(200, core.queryAudit(parseAuditQuery(ctx))));
 

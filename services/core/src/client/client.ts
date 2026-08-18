@@ -23,6 +23,9 @@ import type {
   Task,
   TaskRun,
   ToolCallRecord,
+  Workflow,
+  WorkflowInput,
+  WorkflowRun,
 } from '@jarvis/types';
 import type { JarvisEvent } from '@jarvis/events';
 import {
@@ -248,6 +251,35 @@ export class JarvisClient {
   }
   deleteSkillServer(id: string): Promise<{ ok: boolean }> {
     return this.delete(`/api/skills/servers/${encodeURIComponent(id)}`);
+  }
+
+  listWorkflows(): Promise<Workflow[]> {
+    return this.get('/api/workflows');
+  }
+  createWorkflow(input: WorkflowInput): Promise<Workflow> {
+    return this.post('/api/workflows', input);
+  }
+  updateWorkflow(id: string, input: WorkflowInput): Promise<Workflow> {
+    return this.request('PATCH', `/api/workflows/${encodeURIComponent(id)}`, input);
+  }
+  setWorkflowEnabled(id: string, enabled: boolean): Promise<Workflow> {
+    return this.post(`/api/workflows/${encodeURIComponent(id)}/enabled`, { enabled });
+  }
+  runWorkflow(id: string, input?: string): Promise<WorkflowRun> {
+    return this.post(`/api/workflows/${encodeURIComponent(id)}/run`, { input });
+  }
+  deleteWorkflow(id: string): Promise<{ ok: boolean }> {
+    return this.delete(`/api/workflows/${encodeURIComponent(id)}`);
+  }
+  listWorkflowRuns(options: { workflowId?: string; limit?: number } = {}): Promise<WorkflowRun[]> {
+    const params = new URLSearchParams();
+    if (options.workflowId) params.set('workflowId', options.workflowId);
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    const suffix = params.toString();
+    return this.get(`/api/workflows/runs${suffix ? `?${suffix}` : ''}`);
+  }
+  cancelWorkflowRun(runId: string): Promise<WorkflowRun> {
+    return this.post(`/api/workflows/runs/${encodeURIComponent(runId)}/cancel`, {});
   }
 
   queryAudit(query: AuditQuery = {}): Promise<AuditEvent[]> {
