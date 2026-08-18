@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
-import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.js';
+import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 
 export type JarvisDatabase = Database.Database;
 
@@ -12,6 +12,7 @@ export function openDatabase(file: string): JarvisDatabase {
   const db = new Database(file);
   db.exec(SCHEMA_SQL);
   applyColumnMigrations(db);
+  db.exec(POST_MIGRATION_SQL);
   return db;
 }
 
