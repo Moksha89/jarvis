@@ -6,6 +6,7 @@ export type PageId =
   | 'chat'
   | 'tasks'
   | 'knowledge'
+  | 'screen'
   | 'models'
   | 'permissions'
   | 'activity'
