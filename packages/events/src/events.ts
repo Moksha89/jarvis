@@ -4,6 +4,7 @@ import type {
   ChatStreamEvent,
   KnowledgeIndexProgress,
   KnowledgeSource,
+  McpServer,
   ModelPullProgress,
   ModelRuntimeInfo,
   SavedTask,
@@ -23,6 +24,8 @@ export interface JarvisEventMap {
   'knowledge.index.progress': KnowledgeIndexProgress;
   'knowledge.source.changed': KnowledgeSource;
   'knowledge.source.deleted': { id: string };
+  'mcp.server.changed': McpServer;
+  'mcp.server.deleted': { id: string };
   'tool.call.changed': ToolCallRecord;
   'approval.requested': ApprovalRequest;
   'approval.resolved': ApprovalRequest;

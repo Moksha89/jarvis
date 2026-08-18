@@ -22,6 +22,7 @@
     "@jarvis/permissions": "workspace:*",
     "@jarvis/tools": "workspace:*",
     "@jarvis/types": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "better-sqlite3": "11.7.0"
   },
   "devDependencies": {

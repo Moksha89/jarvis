@@ -15,8 +15,8 @@ describe('JarvisCore tool gating and audit', () => {
     core.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
   });
 
-  afterEach(() => {
-    core.close();
+  afterEach(async () => {
+    await core.close();
   });
 
   it('registers the MVP tools', () => {
@@ -210,7 +210,7 @@ describe('pending approvals across restarts', () => {
     first.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
     const call = await first.callTool('filesystem.write', { path: file, content: 'replaced' });
     expect(call.status).toBe('pending-approval');
-    first.close();
+    await first.close();
 
     const second = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
     try {
@@ -223,7 +223,7 @@ describe('pending approvals across restarts', () => {
       expect(readFileSync(file, 'utf8')).toBe('replaced');
       expect(second.listApprovals({ pendingOnly: true })).toHaveLength(0);
     } finally {
-      second.close();
+      await second.close();
     }
   });
 
@@ -234,7 +234,7 @@ describe('pending approvals across restarts', () => {
     const first = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
     first.addPathScope({ path: workspace, mode: 'read-write', effect: 'allow' });
     await first.callTool('filesystem.write', { path: file, content: 'replaced' });
-    first.close();
+    await first.close();
 
     const second = new JarvisCore({ databaseFile, enableAgent: false, enableScheduler: false });
     try {
@@ -244,7 +244,7 @@ describe('pending approvals across restarts', () => {
       expect(readFileSync(file, 'utf8')).toBe('original');
       await expect(second.deny(approval!.id)).rejects.toThrow();
     } finally {
-      second.close();
+      await second.close();
     }
   });
 });

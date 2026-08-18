@@ -10,3 +10,4 @@ export * from './task.js';
 export * from './system.js';
 export * from './desktop.js';
 export * from './browser.js';
+export * from './mcp.js';

@@ -10,6 +10,8 @@ import type {
   KnowledgeSearchOptions,
   KnowledgeSource,
   KnowledgeStats,
+  McpServer,
+  McpServerInput,
   ModelInfo,
   ModelPullProgress,
   PathScope,
@@ -230,6 +232,22 @@ export class JarvisClient {
   }
   getKnowledgeStats(): Promise<KnowledgeStats> {
     return this.get('/api/knowledge/stats');
+  }
+
+  listSkillServers(): Promise<McpServer[]> {
+    return this.get('/api/skills/servers');
+  }
+  addSkillServer(input: McpServerInput): Promise<McpServer> {
+    return this.post('/api/skills/servers', input);
+  }
+  setSkillServerEnabled(id: string, enabled: boolean): Promise<McpServer> {
+    return this.post(`/api/skills/servers/${encodeURIComponent(id)}/enabled`, { enabled });
+  }
+  reconnectSkillServer(id: string): Promise<McpServer> {
+    return this.post(`/api/skills/servers/${encodeURIComponent(id)}/reconnect`, {});
+  }
+  deleteSkillServer(id: string): Promise<{ ok: boolean }> {
+    return this.delete(`/api/skills/servers/${encodeURIComponent(id)}`);
   }
 
   queryAudit(query: AuditQuery = {}): Promise<AuditEvent[]> {
