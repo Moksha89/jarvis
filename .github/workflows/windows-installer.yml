@@ -60,14 +60,19 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $resourceRoot = Join-Path $PWD 'apps/desktop/src-tauri/resources/core'
-          $appRoot = Join-Path $resourceRoot 'app'
+          $stageRoot = Join-Path $env:RUNNER_TEMP 'jarvis-core-runtime'
+          $appRoot = Join-Path $stageRoot 'app'
+          $resourceRoot = Join-Path $PWD 'apps/desktop/src-tauri/resources'
+          $archive = Join-Path $resourceRoot 'core-runtime.zip'
+
+          if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
           New-Item -ItemType Directory -Force -Path $resourceRoot | Out-Null
+          if (Test-Path $archive) { Remove-Item $archive -Force }
+          if (Test-Path (Join-Path $resourceRoot 'core')) { Remove-Item (Join-Path $resourceRoot 'core') -Recurse -Force }
 
           $nodeExe = (Get-Command node.exe).Source
-          Copy-Item $nodeExe (Join-Path $resourceRoot 'node.exe') -Force
-
-          if (Test-Path $appRoot) { Remove-Item $appRoot -Recurse -Force }
+          Copy-Item $nodeExe (Join-Path $stageRoot 'node.exe') -Force
           pnpm --filter @jarvis/core deploy --prod $appRoot
 
           if (-not (Test-Path (Join-Path $appRoot 'src/main.ts'))) {
@@ -84,7 +89,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $runtime = Join-Path $PWD 'apps/desktop/src-tauri/resources/core'
+          $runtime = Join-Path $env:RUNNER_TEMP 'jarvis-core-runtime'
           $appRoot = Join-Path $runtime 'app'
           $node = Join-Path $runtime 'node.exe'
           $process = Start-Process -FilePath $node -ArgumentList '--import','tsx','src/main.ts' -WorkingDirectory $appRoot -PassThru -WindowStyle Hidden
@@ -101,6 +106,18 @@ jobs:
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
+
+      - name: Archive bundled Jarvis Core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = Join-Path $env:RUNNER_TEMP 'jarvis-core-runtime'
+          $resourceRoot = Join-Path $PWD 'apps/desktop/src-tauri/resources'
+          $archive = Join-Path $resourceRoot 'core-runtime.zip'
+          Compress-Archive -Path (Join-Path $runtime '*') -DestinationPath $archive -CompressionLevel Optimal -Force
+          if (-not (Test-Path $archive)) { throw 'Core runtime archive was not created' }
+          Write-Host "Core archive: $archive"
+          Write-Host "Core archive bytes: $((Get-Item $archive).Length)"
 
       - name: Build NSIS installer
         shell: pwsh
