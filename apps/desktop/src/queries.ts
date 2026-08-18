@@ -214,11 +214,6 @@ export function useBrowserActions() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.toolCalls });
   };
 
-  const open = useMutation({
-    mutationFn: async (url: string): Promise<BrowserPageInfo | undefined> =>
-      unwrapToolCall<BrowserPageInfo>(await coreClient.callTool('browser.open', { url })),
-    onSuccess: afterCall,
-  });
   const read = useMutation({
     mutationFn: async (): Promise<BrowserSnapshot | undefined> =>
       unwrapToolCall<BrowserSnapshot>(await coreClient.callTool('browser.read', {})),
@@ -229,20 +224,50 @@ export function useBrowserActions() {
       unwrapToolCall<BrowserShot>(await coreClient.callTool('browser.screenshot', { fullPage })),
     onSuccess: afterCall,
   });
+
+  /**
+   * Anything that navigates makes the last read stale, and a stale list of buttons
+   * invites clicking a name that belongs to the page that was left.
+   */
+  const afterNavigation = () => {
+    afterCall();
+    read.reset();
+    screenshot.reset();
+  };
+
+  const open = useMutation({
+    mutationFn: async (url: string): Promise<BrowserPageInfo | undefined> =>
+      unwrapToolCall<BrowserPageInfo>(await coreClient.callTool('browser.open', { url })),
+    onSuccess: afterNavigation,
+  });
   const click = useMutation({
-    mutationFn: async (target: string) => unwrapToolCall(await coreClient.callTool('browser.click', { target })),
-    onSuccess: afterCall,
+    mutationFn: async (target: string): Promise<BrowserPageInfo | undefined> =>
+      unwrapToolCall<BrowserPageInfo>(await coreClient.callTool('browser.click', { target })),
+    onSuccess: afterNavigation,
   });
   const type = useMutation({
-    mutationFn: async ({ target, text, submit }: { target: string; text: string; submit: boolean }) =>
-      unwrapToolCall(
+    mutationFn: async ({
+      target,
+      text,
+      submit,
+    }: {
+      target: string;
+      text: string;
+      submit: boolean;
+    }): Promise<BrowserPageInfo | undefined> =>
+      unwrapToolCall<BrowserPageInfo>(
         await coreClient.callTool('browser.type', { target: target === '' ? undefined : target, text, submit }),
       ),
-    onSuccess: afterCall,
+    onSuccess: afterNavigation,
   });
   const close = useMutation({
     mutationFn: async () => unwrapToolCall(await coreClient.callTool('browser.close', {})),
-    onSuccess: afterCall,
+    onSuccess: () => {
+      afterNavigation();
+      open.reset();
+      click.reset();
+      type.reset();
+    },
   });
 
   return { open, read, screenshot, click, type, close };

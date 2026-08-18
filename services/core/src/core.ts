@@ -35,6 +35,7 @@ import {
   createFilesystemTools,
   createPathGuard,
   createShellTools,
+  PlaywrightBrowserBridge,
   ToolRegistry,
 } from '@jarvis/tools';
 import { OllamaAdapter, QwenCodeAgentAdapter, StubAgentAdapter } from '@jarvis/adapters';
@@ -98,6 +99,7 @@ export class JarvisCore {
   private readonly chat: ChatService;
   private readonly knowledgeStore: KnowledgeStore;
   private readonly knowledge: KnowledgeService;
+  private readonly browserBridge = new PlaywrightBrowserBridge();
   private readonly startedAt = Date.now();
 
   constructor(options: JarvisCoreOptions = {}) {
@@ -121,6 +123,7 @@ export class JarvisCore {
         : [];
     const browserTools = createBrowserTools({
       controlEnabled: () => this.settingsStore.getAll().browserControlEnabled,
+      bridge: this.browserBridge,
     });
     for (const tool of [
       ...createFilesystemTools(guard),
@@ -476,6 +479,9 @@ export class JarvisCore {
 
   close(): void {
     this.scheduler.stop();
+    // The browser is a child process of its own: without this it outlives Core,
+    // leaving a headed window and its profile lock behind.
+    void this.browserBridge.close().catch(() => undefined);
     this.bus.clear();
     this.db.close();
   }

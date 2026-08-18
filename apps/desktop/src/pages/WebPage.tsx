@@ -16,6 +16,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import type { BrowserPageInfo } from '@jarvis/types';
 import { jarvisSpacing } from '@jarvis/ui';
 import { PageHeader } from '../components/PageHeader.js';
 import { useBrowserActions, useSettings, useUpdateSettings } from '../queries.js';
@@ -45,7 +46,9 @@ export function WebPage() {
   const [submit, setSubmit] = useState(false);
 
   const controlEnabled = settings.data?.browserControlEnabled ?? false;
-  const page = browser.open.data;
+  // A click or a submitted form navigates too, so the newest of the three results
+  // is the page actually on screen.
+  const page = newestPage([browser.open, browser.click, browser.type]);
   const snapshot = browser.read.data;
   const shot = browser.screenshot.data;
   const error =
@@ -122,6 +125,15 @@ export function WebPage() {
         </Card>
       </div>
 
+      {page && !snapshot ? (
+        <div className={styles.section}>
+          <Caption1 className={styles.meta}>
+            Read the page to see what is on it. Clicking and filling in are offered from that reading, so they always
+            aim at the page in front of you.
+          </Caption1>
+        </div>
+      ) : null}
+
       {snapshot ? (
         <div className={styles.section}>
           <Card className={styles.card}>
@@ -174,4 +186,16 @@ export function WebPage() {
       ) : null}
     </>
   );
+}
+
+/** The most recently submitted of the actions that can change which page is open. */
+function newestPage(
+  results: readonly { data?: BrowserPageInfo; submittedAt: number }[],
+): BrowserPageInfo | undefined {
+  let newest: { data: BrowserPageInfo; submittedAt: number } | undefined;
+  for (const result of results) {
+    if (!result.data) continue;
+    if (!newest || result.submittedAt > newest.submittedAt) newest = { data: result.data, submittedAt: result.submittedAt };
+  }
+  return newest?.data;
 }

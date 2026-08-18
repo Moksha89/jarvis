@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RiskLevel, type BrowserPageInfo, type BrowserShot, type BrowserSnapshot, type JarvisTool } from '@jarvis/types';
 import type { BrowserBridge } from './browser-bridge.js';
+import { isWebUrl } from './browser-bridge.js';
 import { createBrowserTools } from './browser.js';
 
 class FakeBridge implements BrowserBridge {
@@ -94,6 +95,15 @@ describe('browser tools', () => {
       expect(result.ok).toBe(false);
     }
     expect(bridge.opened).toEqual([]);
+  });
+
+  it('treats only the web and the blank page as pages it will work with', () => {
+    for (const url of ['https://example.test/a', 'http://10.0.0.5/', 'about:blank', '']) {
+      expect(isWebUrl(url)).toBe(true);
+    }
+    for (const url of ['file:///C:/Users/me/secrets.txt', 'about:config', 'chrome://settings', 'devtools://x', 'nonsense']) {
+      expect(isWebUrl(url)).toBe(false);
+    }
   });
 
   it('caps how much page text it returns', async () => {

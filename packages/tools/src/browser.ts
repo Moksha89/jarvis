@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { BrowserPageInfo, BrowserShot, BrowserSnapshot, JarvisTool } from '@jarvis/types';
 import { RiskLevel } from '@jarvis/types';
 import type { BrowserBridge } from './browser-bridge.js';
-import { PlaywrightBrowserBridge } from './browser-bridge.js';
+import { isWebUrl, PlaywrightBrowserBridge } from './browser-bridge.js';
 import { defaultScreenshotDir } from './desktop.js';
 
 const MAX_CHARS = 20_000;
@@ -251,11 +251,16 @@ function refuseWhenDisabled(controlEnabled: () => boolean): { ok: false; error: 
   return undefined;
 }
 
-/** Only http(s): `file://` would turn the browser into a way around the path scopes. */
+/**
+ * Only http(s): `file://` would turn the browser into a way around the path scopes.
+ * The same rule is enforced again inside the bridge for wherever the session ends up,
+ * because a link or a submitted form can navigate off the web on its own.
+ */
 function webUrl(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === '' || !isWebUrl(trimmed)) return undefined;
   try {
-    const parsed = new URL(raw.trim());
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : undefined;
+    return new URL(trimmed).toString();
   } catch {
     return undefined;
   }
