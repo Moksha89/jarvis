@@ -1,7 +1,15 @@
 import { create } from 'zustand';
 import type { ChatMode } from '@jarvis/types';
 
-export type PageId = 'home' | 'chat' | 'tasks' | 'models' | 'permissions' | 'activity' | 'settings';
+export type PageId =
+  | 'home'
+  | 'chat'
+  | 'tasks'
+  | 'knowledge'
+  | 'models'
+  | 'permissions'
+  | 'activity'
+  | 'settings';
 
 interface UiState {
   page: PageId;

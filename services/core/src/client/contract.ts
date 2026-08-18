@@ -1,5 +1,6 @@
 import type {
   ChatMode,
+  KnowledgeCorpus,
   PathScope,
   PermissionProfileId,
   PermissionRule,
@@ -60,6 +61,17 @@ export interface AddScopeBody {
   path: string;
   mode: PathScope['mode'];
   effect: PathScope['effect'];
+}
+
+export interface AddKnowledgeSourceBody {
+  path: string;
+}
+
+export interface KnowledgeSearchBody {
+  query: string;
+  limit?: number;
+  corpus?: KnowledgeCorpus;
+  minScore?: number;
 }
 
 export interface SetProfileBody {

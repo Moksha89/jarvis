@@ -6,8 +6,10 @@ import {
   CORE_DEFAULT_PORT,
   type AddRuleBody,
   type AddScopeBody,
+  type AddKnowledgeSourceBody,
   type ApproveBody,
   type CallToolBody,
+  type KnowledgeSearchBody,
   type CreateConversationBody,
   type DenyBody,
   type SavedTaskBody,
@@ -35,6 +37,20 @@ export interface CreateServerOptions extends JarvisCoreOptions {
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 /**
+ * Core has no authentication because it is a localhost service, so the origin check is
+ * what keeps a random web page the user visits from driving the tool loop. Tauri serves
+ * the app from `tauri://localhost` (Windows uses the `.localhost` spelling); the Vite
+ * dev server is the other legitimate caller.
+ */
+const DEFAULT_ALLOWED_ORIGINS: readonly string[] = [
+  'tauri://localhost',
+  'http://tauri.localhost',
+  'https://tauri.localhost',
+  'http://localhost:1420',
+  'http://127.0.0.1:1420',
+];
+
+/**
  * Core runs as a localhost HTTP service so the Tauri webview never links against
  * Node-only code (SQLite, child processes) and the boundary stays explicit.
  */
@@ -42,9 +58,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<S
   const core = new JarvisCore(options);
   const router = buildRouter(core);
   const host = options.host ?? '127.0.0.1';
+  const allowedOrigins = options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS;
 
   const server = createHttpServer((request, response) => {
-    void handle(router, request, response);
+    void handle(router, request, response, allowedOrigins);
   });
 
   const port = await listen(server, options.port ?? CORE_DEFAULT_PORT, host);
@@ -69,9 +86,23 @@ function listen(server: Server, port: number, host: string): Promise<number> {
   });
 }
 
-async function handle(router: Router, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handle(
+  router: Router,
+  request: IncomingMessage,
+  response: ServerResponse,
+  allowedOrigins: readonly string[],
+): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://localhost');
-  response.setHeader('access-control-allow-origin', '*');
+  const origin = request.headers.origin;
+  // A browser always sends `Origin` on cross-origin requests; native clients send none.
+  if (origin !== undefined && !allowedOrigins.includes(origin)) {
+    send(response, 403, { error: `Origin ${origin} may not call Jarvis Core.` });
+    return;
+  }
+  if (origin !== undefined) {
+    response.setHeader('access-control-allow-origin', origin);
+    response.setHeader('vary', 'origin');
+  }
   response.setHeader('access-control-allow-headers', 'content-type');
   response.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
   if (request.method === 'OPTIONS') {
@@ -130,7 +161,6 @@ function startSse(response: ServerResponse): void {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache, no-transform',
     connection: 'keep-alive',
-    'access-control-allow-origin': '*',
   });
 }
 
@@ -298,6 +328,36 @@ function buildRouter(core: JarvisCore): Router {
     core.deletePathScope(ctx.params.id as string);
     ctx.send(200, { ok: true });
   });
+
+  router.get('/api/knowledge/sources', (ctx) => ctx.send(200, core.listKnowledgeSources()));
+  router.post('/api/knowledge/sources', async (ctx) => {
+    const body = await ctx.json<AddKnowledgeSourceBody>();
+    if (!body.path?.trim()) throw new Error('A folder or file path is required.');
+    ctx.send(200, await core.addKnowledgeSource(body.path.trim()));
+  });
+  router.delete('/api/knowledge/sources/:id', (ctx) => {
+    core.deleteKnowledgeSource(ctx.params.id as string);
+    ctx.send(200, { ok: true });
+  });
+  router.post('/api/knowledge/sources/:id/reindex', async (ctx) =>
+    ctx.send(200, await core.reindexKnowledgeSource(ctx.params.id as string)),
+  );
+  router.get('/api/knowledge/sources/:id/documents', (ctx) =>
+    ctx.send(200, core.listKnowledgeDocuments(ctx.params.id as string)),
+  );
+  router.post('/api/knowledge/search', async (ctx) => {
+    const body = await ctx.json<KnowledgeSearchBody>();
+    if (!body.query?.trim()) throw new Error('A search query is required.');
+    ctx.send(
+      200,
+      await core.searchKnowledge(body.query.trim(), {
+        limit: body.limit,
+        corpus: body.corpus,
+        minScore: body.minScore,
+      }),
+    );
+  });
+  router.get('/api/knowledge/stats', async (ctx) => ctx.send(200, await core.getKnowledgeStats()));
 
   router.get('/api/audit', (ctx) => ctx.send(200, core.queryAudit(parseAuditQuery(ctx))));
 

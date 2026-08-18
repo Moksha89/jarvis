@@ -199,3 +199,38 @@ describe('OllamaAdapter model management', () => {
     expect(models[0]?.loaded).toBe(false);
   });
 });
+
+describe('OllamaAdapter embeddings', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('posts the whole batch to /api/embed and returns one vector per input', async () => {
+    let url = '';
+    let body: { model?: string; input?: string[] } = {};
+    stubFetch((requestUrl, init) => {
+      url = requestUrl;
+      body = JSON.parse(String(init?.body)) as { model?: string; input?: string[] };
+      return Response.json({ embeddings: [[1, 0], [0, 1]] });
+    });
+
+    const vectors = await new OllamaAdapter().embed({ model: 'nomic-embed-text', input: ['a', 'b'] });
+    expect(url).toContain('/api/embed');
+    expect(body).toEqual({ model: 'nomic-embed-text', input: ['a', 'b'] });
+    expect(vectors).toEqual([[1, 0], [0, 1]]);
+  });
+
+  it('names the missing embedding model on a 404', async () => {
+    stubFetch(() => new Response('model not found', { status: 404 }));
+    await expect(new OllamaAdapter().embed({ model: 'nomic-embed-text', input: ['a'] })).rejects.toThrow(
+      /is not installed/i,
+    );
+  });
+
+  it('refuses a batch whose length does not match the request', async () => {
+    stubFetch(() => Response.json({ embeddings: [[1, 0]] }));
+    await expect(new OllamaAdapter().embed({ model: 'e', input: ['a', 'b'] })).rejects.toThrow(
+      /cannot be trusted/i,
+    );
+  });
+});

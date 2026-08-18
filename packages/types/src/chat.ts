@@ -1,3 +1,5 @@
+import type { KnowledgeCitation } from './knowledge.js';
+
 /**
  * Chat modes. Ask and Plan answer from the model alone; Agent lets the model
  * drive tools, one permission-gated step at a time.
@@ -28,6 +30,8 @@ export interface ChatMessage {
   error?: string;
   /** Present on `tool` messages produced by an agent run. */
   step?: ToolStepRecord;
+  /** Files or past turns that were retrieved and given to the model for this answer. */
+  citations?: readonly KnowledgeCitation[];
 }
 
 export interface Conversation {
@@ -49,6 +53,7 @@ export interface ChatRequest {
 export type ChatStreamEvent =
   | { type: 'start'; messageId: string; model: string }
   | { type: 'delta'; messageId: string; text: string }
+  | { type: 'context'; messageId: string; citations: readonly KnowledgeCitation[] }
   | { type: 'step'; messageId: string; step: number; maxSteps: number }
   | { type: 'tool-call'; messageId: string; toolId: string; callId: string; summary: string }
   | { type: 'awaiting-approval'; messageId: string; callId: string; approvalId: string; summary: string }

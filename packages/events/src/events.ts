@@ -2,6 +2,8 @@ import type {
   ApprovalRequest,
   AuditEvent,
   ChatStreamEvent,
+  KnowledgeIndexProgress,
+  KnowledgeSource,
   ModelPullProgress,
   ModelRuntimeInfo,
   SavedTask,
@@ -18,6 +20,9 @@ export interface JarvisEventMap {
   'task.saved.deleted': { id: string };
   'task.run.changed': TaskRun;
   'model.pull.progress': ModelPullProgress & { model: string };
+  'knowledge.index.progress': KnowledgeIndexProgress;
+  'knowledge.source.changed': KnowledgeSource;
+  'knowledge.source.deleted': { id: string };
   'tool.call.changed': ToolCallRecord;
   'approval.requested': ApprovalRequest;
   'approval.resolved': ApprovalRequest;

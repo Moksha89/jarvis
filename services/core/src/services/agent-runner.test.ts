@@ -41,6 +41,9 @@ class ScriptedRuntime implements ModelRuntimeAdapter {
     yield { status: 'success', done: true };
   }
   async deleteModel(): Promise<void> {}
+  async embed(): Promise<number[][]> {
+    return [];
+  }
 
   async *streamChat(request: ChatCompletionRequest): AsyncGenerator<ModelStreamChunk> {
     this.requests.push(request);
@@ -169,6 +172,31 @@ describe('AgentRunner', () => {
 
     expect(result.stepsUsed).toBe(2);
     expect(result.steps).toHaveLength(2);
+    expect(result.content).toContain('all 2 allowed steps');
+  });
+
+  it('keeps the prose the model wrote alongside its tool calls when it runs out of steps', async () => {
+    const file = join(workspace, 'note.txt');
+    writeFileSync(file, 'x', 'utf8');
+    const runtime = new ScriptedRuntime([
+      [
+        { type: 'delta', text: 'Here is what I found so far.' },
+        { type: 'tool-calls', calls: [{ name: 'filesystem_read', arguments: { path: file } }] },
+      ],
+    ]);
+    open = harness(runtime, workspace);
+
+    const { result } = await drain(
+      open.runner.run({
+        conversationId: 'conv-1',
+        model: 'test',
+        history: [{ role: 'user', content: 'loop forever' }],
+        maxSteps: 2,
+        messageId: 'msg-1',
+      }),
+    );
+
+    expect(result.content).toContain('Here is what I found so far.');
     expect(result.content).toContain('all 2 allowed steps');
   });
 

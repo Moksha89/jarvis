@@ -7,6 +7,12 @@ export interface JarvisSettings {
   qwenEndpoint: string;
   qwenAutoStart: boolean;
   theme: 'system' | 'light' | 'dark';
+  /** Model used for retrieval embeddings; pulled separately from the chat model. */
+  embeddingModel: string;
+  /** Retrieve from indexed files and past chats before answering. */
+  memoryEnabled: boolean;
+  /** Embed each finished chat turn so later conversations can recall it. */
+  rememberConversations: boolean;
 }
 
 export const DEFAULT_SETTINGS: JarvisSettings = {
@@ -16,6 +22,9 @@ export const DEFAULT_SETTINGS: JarvisSettings = {
   qwenEndpoint: 'http://127.0.0.1:8765',
   qwenAutoStart: true,
   theme: 'system',
+  embeddingModel: 'nomic-embed-text',
+  memoryEnabled: true,
+  rememberConversations: true,
 };
 
 export class SettingsStore {

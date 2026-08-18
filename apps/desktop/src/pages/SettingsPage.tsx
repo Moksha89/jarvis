@@ -81,6 +81,26 @@ export function SettingsPage() {
         </Card>
 
         <Card className={styles.card}>
+          <Subtitle2>Memory and knowledge</Subtitle2>
+          <Field label="Embedding model">
+            <Input value={draft.embeddingModel} onChange={(_, data) => patch({ embeddingModel: data.value })} />
+          </Field>
+          <Switch
+            checked={draft.memoryEnabled}
+            label="Use indexed files and past chats to answer"
+            onChange={(_, data) => patch({ memoryEnabled: data.checked })}
+          />
+          <Switch
+            checked={draft.rememberConversations}
+            label="Remember completed conversations"
+            onChange={(_, data) => patch({ rememberConversations: data.checked })}
+          />
+          <Caption1 className={styles.hint}>
+            Pull the embedding model in Models first. Changing it makes existing passages unusable until you reindex.
+          </Caption1>
+        </Card>
+
+        <Card className={styles.card}>
           <Subtitle2>Appearance</Subtitle2>
           <Field label="Theme">
             <Dropdown

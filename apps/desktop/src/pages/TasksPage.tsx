@@ -16,7 +16,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import type { SavedTask, SavedTaskInput, ScheduleKind, TaskRunStatus } from '@jarvis/types';
+import type { SavedTask, SavedTaskInput, ScheduleKind, TaskRunStatus, TaskSchedule } from '@jarvis/types';
 import { TASK_LIMITS } from '@jarvis/types';
 import { StatusBadge, TaskCard, jarvisSpacing } from '@jarvis/ui';
 import type { StatusTone } from '@jarvis/ui';
@@ -157,7 +157,7 @@ export function TasksPage() {
               value={scheduleLabel(draft.schedule.kind)}
               selectedOptions={[draft.schedule.kind]}
               onOptionSelect={(_, data) =>
-                setDraft({ ...draft, schedule: { kind: (data.optionValue as ScheduleKind) ?? 'manual' } })
+                setDraft({ ...draft, schedule: scheduleFor((data.optionValue as ScheduleKind) ?? 'manual', draft.schedule) })
               }
             >
               <Option value="manual">Manual only</Option>
@@ -282,6 +282,19 @@ export function TasksPage() {
       </div>
     </>
   );
+}
+
+/**
+ * Seeds the concrete default the inputs display, and keeps a value the user already
+ * typed when they switch kinds. Without this the form shows "5" or "09:00" while the
+ * draft carries nothing, and Core rejects the save.
+ */
+function scheduleFor(kind: ScheduleKind, previous: TaskSchedule): TaskSchedule {
+  if (kind === 'interval') {
+    return { kind, intervalMinutes: previous.intervalMinutes ?? TASK_LIMITS.minIntervalMinutes };
+  }
+  if (kind === 'daily') return { kind, dailyTime: previous.dailyTime ?? '09:00' };
+  return { kind: 'manual' };
 }
 
 function scheduleLabel(kind: ScheduleKind): string {

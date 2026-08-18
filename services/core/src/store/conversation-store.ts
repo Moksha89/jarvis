@@ -1,4 +1,11 @@
-import type { ChatMessage, ChatMode, Conversation, MessageRole, ToolStepRecord } from '@jarvis/types';
+import type {
+  ChatMessage,
+  ChatMode,
+  Conversation,
+  KnowledgeCitation,
+  MessageRole,
+  ToolStepRecord,
+} from '@jarvis/types';
 import type { JarvisDatabase } from '../db/database.js';
 
 interface ConversationRow {
@@ -19,6 +26,7 @@ interface MessageRow {
   mode: string | null;
   error: string | null;
   step_json: string | null;
+  citations_json: string | null;
   created_at: string;
 }
 
@@ -69,6 +77,7 @@ export class ConversationStore {
     mode?: ChatMode;
     error?: string;
     step?: ToolStepRecord;
+    citations?: readonly KnowledgeCitation[];
     id?: string;
   }): ChatMessage {
     const now = new Date().toISOString();
@@ -81,12 +90,14 @@ export class ConversationStore {
       mode: message.mode,
       error: message.error,
       step: message.step,
+      citations: message.citations,
       createdAt: now,
     };
     this.db
       .prepare(
-        `INSERT INTO messages (id, conversation_id, role, content, model, mode, error, step_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages
+           (id, conversation_id, role, content, model, mode, error, step_json, citations_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -97,18 +108,27 @@ export class ConversationStore {
         record.mode ?? null,
         record.error ?? null,
         record.step ? JSON.stringify(record.step) : null,
+        record.citations?.length ? JSON.stringify(record.citations) : null,
         now,
       );
     this.db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, message.conversationId);
     return record;
   }
 
-  updateMessage(id: string, patch: { content?: string; error?: string }): void {
+  updateMessage(
+    id: string,
+    patch: { content?: string; error?: string; citations?: readonly KnowledgeCitation[] },
+  ): void {
     if (patch.content !== undefined) {
       this.db.prepare('UPDATE messages SET content = ? WHERE id = ?').run(patch.content, id);
     }
     if (patch.error !== undefined) {
       this.db.prepare('UPDATE messages SET error = ? WHERE id = ?').run(patch.error, id);
+    }
+    if (patch.citations !== undefined) {
+      this.db
+        .prepare('UPDATE messages SET citations_json = ? WHERE id = ?')
+        .run(patch.citations.length ? JSON.stringify(patch.citations) : null, id);
     }
   }
 
@@ -137,6 +157,7 @@ export class ConversationStore {
       mode: (row.mode as ChatMode | null) ?? undefined,
       error: row.error ?? undefined,
       step: row.step_json ? (JSON.parse(row.step_json) as ToolStepRecord) : undefined,
+      citations: row.citations_json ? (JSON.parse(row.citations_json) as KnowledgeCitation[]) : undefined,
       createdAt: row.created_at,
     }));
   }

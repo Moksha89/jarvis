@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import type { AuditQuery, PermissionProfileId, SavedTaskInput } from '@jarvis/types';
+import type { AuditQuery, KnowledgeCorpus, PermissionProfileId, SavedTaskInput } from '@jarvis/types';
 import type { CoreSettingsDto } from '@jarvis/core/client';
 import { coreClient } from './core-client.js';
 
@@ -18,6 +18,9 @@ export const queryKeys = {
   permissions: ['permissions'] as const,
   audit: (query: AuditQuery) => ['audit', query] as const,
   settings: ['settings'] as const,
+  knowledgeSources: ['knowledge', 'sources'] as const,
+  knowledgeStats: ['knowledge', 'stats'] as const,
+  knowledgeDocuments: (sourceId: string) => ['knowledge', 'documents', sourceId] as const,
 };
 
 export function useSystemStatus() {
@@ -103,6 +106,45 @@ export function useAudit(query: AuditQuery) {
   return useQuery({ queryKey: queryKeys.audit(query), queryFn: () => coreClient.queryAudit(query) });
 }
 
+export function useKnowledgeSources() {
+  return useQuery({ queryKey: queryKeys.knowledgeSources, queryFn: () => coreClient.listKnowledgeSources() });
+}
+
+export function useKnowledgeStats() {
+  return useQuery({ queryKey: queryKeys.knowledgeStats, queryFn: () => coreClient.getKnowledgeStats() });
+}
+
+export function useKnowledgeDocuments(sourceId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.knowledgeDocuments(sourceId ?? 'none'),
+    queryFn: () => coreClient.listKnowledgeDocuments(sourceId as string),
+    enabled: Boolean(sourceId),
+  });
+}
+
+export function useKnowledgeActions() {
+  const queryClient = useQueryClient();
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+  };
+
+  const addSource = useMutation({ mutationFn: (path: string) => coreClient.addKnowledgeSource(path), onSuccess: invalidate });
+  const removeSource = useMutation({
+    mutationFn: (id: string) => coreClient.deleteKnowledgeSource(id),
+    onSuccess: invalidate,
+  });
+  const reindex = useMutation({
+    mutationFn: (id: string) => coreClient.reindexKnowledgeSource(id),
+    onSuccess: invalidate,
+  });
+  const search = useMutation({
+    mutationFn: ({ query, corpus }: { query: string; corpus?: KnowledgeCorpus }) =>
+      coreClient.searchKnowledge(query, { corpus }),
+  });
+
+  return { addSource, removeSource, reindex, search };
+}
+
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: () => coreClient.getSettings() });
 }
@@ -156,6 +198,11 @@ export function useCoreEvents(): void {
           break;
         case 'audit.appended':
           void queryClient.invalidateQueries({ queryKey: ['audit'] });
+          break;
+        case 'knowledge.source.changed':
+        case 'knowledge.source.deleted':
+        case 'knowledge.index.progress':
+          void queryClient.invalidateQueries({ queryKey: ['knowledge'] });
           break;
         case 'runtime.status':
           void queryClient.invalidateQueries({ queryKey: queryKeys.status });

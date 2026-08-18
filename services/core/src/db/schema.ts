@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS messages (
   mode TEXT,
   error TEXT,
   step_json TEXT,
+  citations_json TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
@@ -143,6 +144,48 @@ CREATE TABLE IF NOT EXISTS task_runs (
   steps_used INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS knowledge_sources (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  last_indexed_at TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  title TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  chunk_count INTEGER NOT NULL,
+  indexed_at TEXT NOT NULL,
+  UNIQUE (source_id, path)
+);
+
+-- Embeddings are float32 blobs, normalised on write, so a cosine score is a plain
+-- dot product at query time. The model column is kept because vectors from different
+-- embedding models are not comparable.
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+  id TEXT PRIMARY KEY,
+  corpus TEXT NOT NULL,
+  document_id TEXT REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  title TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  dimensions INTEGER NOT NULL,
+  model TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_lookup ON knowledge_chunks(corpus, model);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document ON knowledge_chunks(document_id);
 `;
 
 /**
@@ -151,4 +194,5 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, started_at D
  */
 export const COLUMN_MIGRATIONS: readonly { table: string; column: string; definition: string }[] = [
   { table: 'messages', column: 'step_json', definition: 'TEXT' },
+  { table: 'messages', column: 'citations_json', definition: 'TEXT' },
 ];
