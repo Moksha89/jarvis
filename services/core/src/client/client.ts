@@ -5,6 +5,11 @@ import type {
   ChatMessage,
   ChatStreamEvent,
   Conversation,
+  KnowledgeDocument,
+  KnowledgeHit,
+  KnowledgeSearchOptions,
+  KnowledgeSource,
+  KnowledgeStats,
   ModelInfo,
   ModelPullProgress,
   PathScope,
@@ -24,6 +29,7 @@ import {
   type AddScopeBody,
   type ApproveBody,
   type CreateConversationBody,
+  type KnowledgeSearchBody,
   type SavedTaskBody,
   type SendChatBody,
 } from './contract.js';
@@ -45,6 +51,9 @@ export interface CoreSettingsDto {
   qwenEndpoint: string;
   qwenAutoStart: boolean;
   theme: 'system' | 'light' | 'dark';
+  embeddingModel: string;
+  memoryEnabled: boolean;
+  rememberConversations: boolean;
 }
 
 /**
@@ -196,6 +205,29 @@ export class JarvisClient {
   }
   deleteScope(id: string): Promise<{ ok: boolean }> {
     return this.delete(`/api/permissions/scopes/${encodeURIComponent(id)}`);
+  }
+
+  listKnowledgeSources(): Promise<KnowledgeSource[]> {
+    return this.get('/api/knowledge/sources');
+  }
+  addKnowledgeSource(path: string): Promise<KnowledgeSource> {
+    return this.post('/api/knowledge/sources', { path });
+  }
+  deleteKnowledgeSource(id: string): Promise<{ ok: boolean }> {
+    return this.delete(`/api/knowledge/sources/${encodeURIComponent(id)}`);
+  }
+  reindexKnowledgeSource(id: string): Promise<KnowledgeSource> {
+    return this.post(`/api/knowledge/sources/${encodeURIComponent(id)}/reindex`, {});
+  }
+  listKnowledgeDocuments(sourceId: string): Promise<KnowledgeDocument[]> {
+    return this.get(`/api/knowledge/sources/${encodeURIComponent(sourceId)}/documents`);
+  }
+  searchKnowledge(query: string, options: KnowledgeSearchOptions = {}): Promise<KnowledgeHit[]> {
+    const body: KnowledgeSearchBody = { query, ...options };
+    return this.post('/api/knowledge/search', body);
+  }
+  getKnowledgeStats(): Promise<KnowledgeStats> {
+    return this.get('/api/knowledge/stats');
   }
 
   queryAudit(query: AuditQuery = {}): Promise<AuditEvent[]> {

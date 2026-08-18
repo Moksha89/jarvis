@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, Caption1, Tooltip, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ArrowClockwise20Regular, Copy20Regular, CheckmarkCircle20Regular } from '@fluentui/react-icons';
 import { StatusBadge, jarvisRadius, jarvisSpacing } from '@jarvis/ui';
-import type { ChatMessage } from '@jarvis/types';
+import type { ChatMessage, KnowledgeCitation } from '@jarvis/types';
 import { Markdown } from './Markdown.js';
 
 const useStyles = makeStyles({
@@ -26,6 +26,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
   },
   stepText: { color: tokens.colorNeutralForeground2 },
+  citations: { display: 'flex', flexDirection: 'column', gap: '2px', color: tokens.colorNeutralForeground3 },
 });
 
 export interface MessageBubbleProps {
@@ -33,12 +34,15 @@ export interface MessageBubbleProps {
   /** Assistant messages can be regenerated; user messages can be retried. */
   onRetry?: () => void;
   retryLabel?: string;
+  /** Live citations for a message still being streamed, before Core persists them. */
+  citations?: readonly KnowledgeCitation[];
 }
 
-export function MessageBubble({ message, onRetry, retryLabel = 'Regenerate' }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, retryLabel = 'Regenerate', citations }: MessageBubbleProps) {
   const styles = useStyles();
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
+  const sources = message.citations ?? citations ?? [];
 
   if (message.step) {
     return (
@@ -61,6 +65,16 @@ export function MessageBubble({ message, onRetry, retryLabel = 'Regenerate' }: M
         <Markdown content={message.content} />
         {message.error ? <Caption1 className={styles.error}>{message.error}</Caption1> : null}
       </div>
+      {sources.length > 0 ? (
+        <div className={styles.citations}>
+          <Caption1>Sources used</Caption1>
+          {sources.map((citation, index) => (
+            <Caption1 key={`${citation.source}-${index}`}>
+              {`[${index + 1}] ${citation.title} · ${citation.corpus === 'files' ? citation.source : 'past conversation'}`}
+            </Caption1>
+          ))}
+        </div>
+      ) : null}
       <div className={styles.meta}>
         <Caption1>
           {`${isUser ? 'You' : (message.model ?? 'Jarvis')} · ${new Date(message.createdAt).toLocaleTimeString()}`}

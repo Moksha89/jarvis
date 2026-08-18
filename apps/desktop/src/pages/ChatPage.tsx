@@ -128,6 +128,15 @@ export function ChatPage() {
                 ))}
               </div>
             ) : null}
+            {stream.citations.length > 0 ? (
+              <div className={styles.trail}>
+                {stream.citations.map((citation, index) => (
+                  <Body1 key={`${citation.source}-${index}`} className={styles.empty}>
+                    {`[${index + 1}] ${citation.title}`}
+                  </Body1>
+                ))}
+              </div>
+            ) : null}
           </Card>
         ) : null}
       </div>

@@ -124,6 +124,40 @@ describe('TaskScheduler', () => {
     scheduler.stop();
   });
 
+  it('survives a task deleted while one of its runs is still in flight', async () => {
+    const gate = gatedRunner();
+    const scheduler = new TaskScheduler(tasks, conversations, bus, gate.runner);
+    const task = tasks.create({ name: 'Task', prompt: 'go', schedule: { kind: 'manual' } });
+
+    scheduler.runNow(task.id);
+    await flush();
+
+    // What Core does on delete: abort the run, then drop the rows underneath it. The
+    // run finishing afterwards must not throw on rows that are no longer there.
+    scheduler.cancelRunsForTask(task.id);
+    tasks.delete(task.id);
+    await flush();
+
+    expect(gate.aborted()).toBe(1);
+    expect(tasks.listRuns({ taskId: task.id })).toHaveLength(0);
+    scheduler.stop();
+  });
+
+  it('does not finalise runs after it has been stopped', async () => {
+    const gate = gatedRunner();
+    const scheduler = new TaskScheduler(tasks, conversations, bus, gate.runner);
+    const task = tasks.create({ name: 'Task', prompt: 'go', schedule: { kind: 'manual' } });
+
+    const run = scheduler.runNow(task.id);
+    await flush();
+    scheduler.stop();
+    await flush();
+
+    expect(gate.aborted()).toBe(1);
+    // Left as running on purpose: the next start marks crashed runs as failed.
+    expect(tasks.requireRun(run.id).status).toBe('running');
+  });
+
   it('catches up an overdue schedule on the first tick and moves it forward', async () => {
     const gate = gatedRunner();
     const task = tasks.create({

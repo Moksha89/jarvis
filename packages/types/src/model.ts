@@ -74,6 +74,11 @@ export type ModelStreamChunk =
   | { type: 'tool-calls'; calls: readonly ModelToolCall[] }
   | { type: 'done'; finishReason?: string };
 
+export interface EmbeddingRequest {
+  model: string;
+  input: readonly string[];
+}
+
 /** Every model runtime (Ollama today) is reached through this interface only. */
 export interface ModelRuntimeAdapter {
   readonly id: string;
@@ -89,4 +94,6 @@ export interface ModelRuntimeAdapter {
     request: ChatCompletionRequest,
     signal?: AbortSignal,
   ): AsyncIterable<ModelStreamChunk>;
+  /** One vector per input, in the same order. Used for local retrieval. */
+  embed(request: EmbeddingRequest, signal?: AbortSignal): Promise<number[][]>;
 }

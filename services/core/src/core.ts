@@ -9,6 +9,11 @@ import type {
   Conversation,
   ChatMessage,
   JarvisTool,
+  KnowledgeDocument,
+  KnowledgeHit,
+  KnowledgeSearchOptions,
+  KnowledgeSource,
+  KnowledgeStats,
   ModelInfo,
   ModelPullProgress,
   PathScope,
@@ -29,11 +34,14 @@ import { OllamaAdapter, QwenCodeAgentAdapter, StubAgentAdapter } from '@jarvis/a
 import { openDatabase, type JarvisDatabase } from './db/database.js';
 import { AuditStore } from './store/audit-store.js';
 import { ConversationStore } from './store/conversation-store.js';
+import { KnowledgeStore } from './store/knowledge-store.js';
 import { PermissionStore } from './store/permission-store.js';
 import { SavedTaskStore } from './store/saved-task-store.js';
 import { DEFAULT_SETTINGS, SettingsStore, type JarvisSettings } from './store/settings-store.js';
 import { AgentRunner } from './services/agent-runner.js';
 import { ChatService } from './services/chat-service.js';
+import { KnowledgeService } from './services/knowledge-service.js';
+import { createKnowledgeSearchTool } from './services/knowledge-tool.js';
 import { ModelRouter } from './services/model-router.js';
 import { TaskManager } from './services/task-manager.js';
 import { TaskScheduler } from './services/task-scheduler.js';
@@ -81,6 +89,8 @@ export class JarvisCore {
   private readonly savedTasks: SavedTaskStore;
   private readonly scheduler: TaskScheduler;
   private readonly chat: ChatService;
+  private readonly knowledgeStore: KnowledgeStore;
+  private readonly knowledge: KnowledgeService;
   private readonly startedAt = Date.now();
 
   constructor(options: JarvisCoreOptions = {}) {
@@ -103,6 +113,15 @@ export class JarvisCore {
     }
 
     this.runtime = new OllamaAdapter({ endpoint: settings.ollamaEndpoint });
+    this.knowledgeStore = new KnowledgeStore(this.db);
+    this.knowledge = new KnowledgeService({
+      store: this.knowledgeStore,
+      runtime: this.runtime,
+      guard,
+      settings: () => this.settingsStore.getAll(),
+      bus: this.bus,
+    });
+    this.registry.register(createKnowledgeSearchTool(this.knowledge));
     const router = new ModelRouter(this.runtime, () => this.settingsStore.getAll().defaultModel);
 
     // Qwen Code is opt-in: when it cannot be reached, the stub keeps the same
@@ -130,6 +149,7 @@ export class JarvisCore {
       this.tasks,
       this.bus,
       agentRunner,
+      this.knowledge,
       this.agentMode === 'qwen-serve' ? this.agent : undefined,
     );
 
@@ -224,6 +244,9 @@ export class JarvisCore {
 
   deleteConversation(id: string): void {
     this.conversationStore.delete(id);
+    // Deleting a conversation has to delete what Jarvis remembered from it too,
+    // otherwise it keeps answering from a transcript the user removed.
+    this.knowledge.forgetConversation(id);
   }
 
   listMessages(conversationId: string): ChatMessage[] {
@@ -272,6 +295,8 @@ export class JarvisCore {
   }
 
   deleteSavedTask(id: string): void {
+    // Stop the work first: deleting the rows under a live run leaves it writing to nothing.
+    this.scheduler.cancelRunsForTask(id);
     this.savedTasks.delete(id);
     this.bus.emit('task.saved.deleted', { id });
   }
@@ -286,6 +311,36 @@ export class JarvisCore {
 
   listTaskRuns(options: { taskId?: string; limit?: number } = {}): TaskRun[] {
     return this.savedTasks.listRuns(options);
+  }
+
+  // ---------------------------------------------------------------- knowledge
+
+  listKnowledgeSources(): KnowledgeSource[] {
+    return this.knowledge.listSources();
+  }
+
+  async addKnowledgeSource(path: string): Promise<KnowledgeSource> {
+    return await this.knowledge.addSource(path);
+  }
+
+  deleteKnowledgeSource(id: string): void {
+    this.knowledge.removeSource(id);
+  }
+
+  async reindexKnowledgeSource(id: string): Promise<KnowledgeSource> {
+    return await this.knowledge.indexSource(id);
+  }
+
+  listKnowledgeDocuments(sourceId: string): KnowledgeDocument[] {
+    return this.knowledge.listDocuments(sourceId);
+  }
+
+  async searchKnowledge(query: string, options: KnowledgeSearchOptions = {}): Promise<KnowledgeHit[]> {
+    return await this.knowledge.search(query, options);
+  }
+
+  async getKnowledgeStats(): Promise<KnowledgeStats> {
+    return await this.knowledge.stats();
   }
 
   // ---------------------------------------------------------------- tools

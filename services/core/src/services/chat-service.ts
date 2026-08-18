@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatMode,
   ChatStreamEvent,
+  KnowledgeCitation,
   ModelRuntimeAdapter,
   Task,
 } from '@jarvis/types';
@@ -11,6 +12,7 @@ import { TASK_LIMITS } from '@jarvis/types';
 import type { EventBus } from '@jarvis/events';
 import type { ConversationStore } from '../store/conversation-store.js';
 import type { AgentRunner } from './agent-runner.js';
+import type { KnowledgeService } from './knowledge-service.js';
 import type { ModelRouter } from './model-router.js';
 import type { TaskManager } from './task-manager.js';
 
@@ -45,6 +47,7 @@ export class ChatService {
     private readonly tasks: TaskManager,
     private readonly bus: EventBus,
     private readonly agentRunner: AgentRunner,
+    private readonly knowledge?: KnowledgeService,
     private readonly agent?: AgentAdapter,
   ) {}
 
@@ -90,8 +93,10 @@ export class ChatService {
       return;
     }
 
+    const context = (await this.knowledge?.contextFor(options.content)) ?? { citations: [] };
+
     if (options.mode === 'agent') {
-      yield* this.runAgent(options, model, task);
+      yield* this.runAgent(options, model, task, context);
       return;
     }
 
@@ -104,6 +109,10 @@ export class ChatService {
     });
     this.tasks.update(task.id, { status: 'running' });
     yield this.emit({ type: 'start', messageId: assistant.id, model });
+    if (context.citations.length > 0) {
+      this.conversations.updateMessage(assistant.id, { citations: context.citations });
+      yield this.emit({ type: 'context', messageId: assistant.id, citations: context.citations });
+    }
 
     const history = this.conversations
       .listMessages(options.conversationId)
@@ -111,12 +120,13 @@ export class ChatService {
 
     let assembled = '';
     try {
-      for await (const text of this.streamText(history, options, model)) {
+      for await (const text of this.streamText(history, options, model, context.prompt)) {
         assembled += text;
         yield this.emit({ type: 'delta', messageId: assistant.id, text });
       }
       this.conversations.updateMessage(assistant.id, { content: assembled });
       this.tasks.update(task.id, { status: 'succeeded' });
+      void this.remember(options, assembled);
       yield this.emit({ type: 'done', messageId: assistant.id, content: assembled });
     } catch (error) {
       const message = toMessage(error);
@@ -130,15 +140,26 @@ export class ChatService {
    * Agent turns write the tool trail to the conversation as they go, then store the
    * final answer last so the transcript reads in the order the work happened.
    */
-  private async *runAgent(options: SendOptions, model: string, task: Task): AsyncGenerator<ChatStreamEvent> {
+  private async *runAgent(
+    options: SendOptions,
+    model: string,
+    task: Task,
+    context: { prompt?: string; citations: readonly KnowledgeCitation[] },
+  ): AsyncGenerator<ChatStreamEvent> {
     const messageId = crypto.randomUUID();
     this.tasks.update(task.id, { status: 'running' });
     yield this.emit({ type: 'start', messageId, model });
+    if (context.citations.length > 0) {
+      yield this.emit({ type: 'context', messageId, citations: context.citations });
+    }
 
     const history = this.conversations
       .listMessages(options.conversationId)
       .filter((message) => message.content.length > 0)
       .map(toCompletionMessage);
+    // Retrieved context rides in front of the turn; the agent can also call
+    // `knowledge.search` itself when it needs more than this.
+    if (context.prompt) history.unshift({ role: 'system', content: context.prompt });
     const maxSteps = clampSteps(options.maxSteps ?? TASK_LIMITS.maxSteps);
 
     try {
@@ -163,7 +184,9 @@ export class ChatService {
             content: next.value.content,
             model,
             mode: 'agent',
+            citations: context.citations.length > 0 ? context.citations : undefined,
           });
+          void this.remember(options, next.value.content);
           this.tasks.update(task.id, {
             status: 'succeeded',
             detail: `agent mode · ${next.value.steps.length} tool ${next.value.steps.length === 1 ? 'call' : 'calls'}`,
@@ -213,10 +236,12 @@ export class ChatService {
     history: readonly ChatMessage[],
     options: SendOptions,
     model: string,
+    context?: string,
   ): AsyncGenerator<string> {
     const mode = options.mode === 'plan' ? 'plan' : 'ask';
     const messages: ChatCompletionMessage[] = [
       { role: 'system', content: SYSTEM_PROMPTS[mode] },
+      ...(context ? [{ role: 'system' as const, content: context }] : []),
       ...history.map(toCompletionMessage),
     ];
 
@@ -232,6 +257,18 @@ export class ChatService {
     for await (const chunk of this.runtime.streamChat({ model, messages }, options.signal)) {
       if (chunk.type === 'delta') yield chunk.text;
     }
+  }
+
+  /** Fire-and-forget: remembering a turn must never fail the answer the user has. */
+  private remember(options: SendOptions, answer: string): Promise<void> {
+    if (!this.knowledge || !answer.trim()) return Promise.resolve();
+    const conversation = this.conversations.get(options.conversationId);
+    return this.knowledge.remember({
+      conversationId: options.conversationId,
+      title: conversation?.title ?? 'Conversation',
+      question: options.content,
+      answer,
+    });
   }
 
   private async isAgentUsable(): Promise<boolean> {

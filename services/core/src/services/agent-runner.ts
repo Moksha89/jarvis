@@ -97,6 +97,9 @@ export class AgentRunner {
         return { content: answer, stepsUsed: step, steps };
       }
 
+      // Prose the model wrote alongside its tool calls was streamed to the user, so keep
+      // it: if the step budget runs out, it is the only explanation the transcript has.
+      if (text.trim()) answer = answer ? `${answer}\n\n${text.trim()}` : text.trim();
       transcript.push({ role: 'assistant', content: text, toolCalls: calls });
 
       for (const call of calls) {

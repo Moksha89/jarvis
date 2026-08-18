@@ -25,6 +25,7 @@ describe('JarvisCore tool gating and audit', () => {
       'filesystem.list',
       'filesystem.read',
       'filesystem.write',
+      'knowledge.search',
       'shell.classify',
       'shell.run',
     ]);

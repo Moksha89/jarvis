@@ -25,6 +25,7 @@ export interface TaskRunner {
  */
 export class TaskScheduler {
   private timer: NodeJS.Timeout | undefined;
+  private stopped = false;
   private readonly active = new Map<string, { taskId: string; controller: AbortController }>();
 
   constructor(
@@ -36,6 +37,7 @@ export class TaskScheduler {
 
   start(): void {
     if (this.timer) return;
+    this.stopped = false;
     for (const run of this.tasks.failStaleRuns()) {
       this.bus.emit('task.run.changed', run);
     }
@@ -46,7 +48,12 @@ export class TaskScheduler {
     void this.tick();
   }
 
+  /**
+   * Aborts in-flight runs without awaiting them. Callers close the database right
+   * after, so `stopped` tells a run's bookkeeping to stay off a dying handle.
+   */
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     for (const entry of this.active.values()) {
@@ -71,6 +78,13 @@ export class TaskScheduler {
     if (!entry) throw new Error('That run already finished.');
     entry.controller.abort();
     return this.tasks.requireRun(runId);
+  }
+
+  /** Stops whatever a task is doing, so its rows can be deleted safely. */
+  cancelRunsForTask(taskId: string): void {
+    for (const entry of this.active.values()) {
+      if (entry.taskId === taskId) entry.controller.abort();
+    }
   }
 
   isRunning(taskId: string): boolean {
@@ -131,7 +145,19 @@ export class TaskScheduler {
       error = caught instanceof Error ? caught.message : String(caught);
     } finally {
       this.active.delete(run.id);
-      const cancelled = controller.signal.aborted;
+      this.record(task, run, controller.signal.aborted, error, steps);
+    }
+  }
+
+  /**
+   * Records the outcome of a fire-and-forget run. Nothing awaits `execute`, so a throw
+   * here would be an unhandled rejection that can take Core down: the task and its runs
+   * can be deleted while the run is still streaming, and on shutdown the database is
+   * already closed.
+   */
+  private record(task: SavedTask, run: TaskRun, cancelled: boolean, error: string | undefined, steps: number): void {
+    if (this.stopped) return;
+    try {
       const finished = this.tasks.finishRun(run.id, {
         status: cancelled ? 'cancelled' : error ? 'failed' : 'succeeded',
         error: cancelled ? 'You stopped this run.' : error,
@@ -139,6 +165,14 @@ export class TaskScheduler {
       });
       this.bus.emit('task.run.changed', finished);
       this.bus.emit('task.saved.changed', this.tasks.require(task.id));
+    } catch (caught) {
+      this.bus.emit('core.log', {
+        level: 'warn',
+        message: `Run ${run.id} of "${task.name}" ended after the task was removed: ${
+          caught instanceof Error ? caught.message : String(caught)
+        }`,
+        time: new Date().toISOString(),
+      });
     }
   }
 }

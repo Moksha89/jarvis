@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import type {
   ChatCompletionMessage,
   ChatCompletionRequest,
+  EmbeddingRequest,
   ModelInfo,
   ModelPullProgress,
   ModelRuntimeAdapter,
@@ -175,6 +176,38 @@ export class OllamaAdapter implements ModelRuntimeAdapter {
       const detail = await response.text().catch(() => '');
       throw new Error(`Ollama could not delete ${model} (${response.status}): ${detail.slice(0, 300)}`);
     }
+  }
+
+  /**
+   * Embeds a batch in one request. Ollama answers with `embeddings` on `/api/embed`;
+   * a missing model comes back as a 404, which is worth naming for the user because
+   * an embedding model has to be pulled separately from the chat model.
+   */
+  async embed(request: EmbeddingRequest, signal?: AbortSignal): Promise<number[][]> {
+    const response = await fetch(`${this.endpoint}/api/embed`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: request.model, input: request.input }),
+      signal: signal ?? AbortSignal.timeout(120_000),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      if (response.status === 404) {
+        throw new Error(
+          `Embedding model "${request.model}" is not installed. Pull it on the Models page (for example nomic-embed-text), then index again.`,
+        );
+      }
+      throw new Error(`Ollama could not embed with ${request.model} (${response.status}): ${detail.slice(0, 300)}`);
+    }
+    const payload = (await response.json()) as { embeddings?: number[][]; error?: string };
+    if (payload.error) throw new Error(payload.error);
+    const embeddings = payload.embeddings ?? [];
+    if (embeddings.length !== request.input.length) {
+      throw new Error(
+        `Ollama returned ${embeddings.length} embeddings for ${request.input.length} inputs; the batch cannot be trusted.`,
+      );
+    }
+    return embeddings;
   }
 
   async loadModel(model: string): Promise<void> {

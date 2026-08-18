@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { ChatMode } from '@jarvis/types';
+import type { ChatMode, KnowledgeCitation } from '@jarvis/types';
 import { coreClient } from '../core-client.js';
 import { queryKeys } from '../queries.js';
 
@@ -20,9 +20,11 @@ export interface StreamingState {
   step: { current: number; max: number } | null;
   /** Agent mode only: the tools this turn has reached for, newest last. */
   activity: AgentActivity[];
+  /** Files or past turns retrieved for this answer. */
+  citations: readonly KnowledgeCitation[];
 }
 
-const IDLE: StreamingState = { text: '', busy: false, error: null, step: null, activity: [] };
+const IDLE: StreamingState = { text: '', busy: false, error: null, step: null, activity: [], citations: [] };
 
 export function useChatStream(conversationId: string | null) {
   const queryClient = useQueryClient();
@@ -58,6 +60,9 @@ export function useChatStream(conversationId: string | null) {
             case 'delta':
               setState((prev) => ({ ...prev, text: prev.text + event.text }));
               break;
+            case 'context':
+              setState((prev) => ({ ...prev, citations: event.citations }));
+              break;
             case 'step':
               setState((prev) => ({ ...prev, step: { current: event.step, max: event.maxSteps } }));
               break;
@@ -86,7 +91,9 @@ export function useChatStream(conversationId: string | null) {
               break;
           }
         }
-        setState(IDLE);
+        // Core reports a failed turn as an `error` event followed by a normal end of
+        // stream, so the reset must not wipe what the stream just told us.
+        setState((prev) => ({ ...IDLE, error: prev.error }));
       } catch (error) {
         // Aborting is a user action ("Stop"), not a failure.
         const aborted = controller.signal.aborted;
