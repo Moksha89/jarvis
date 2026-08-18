@@ -1,0 +1,123 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - chatgpt/windows-bundled-installer
+
+permissions:
+  contents: read
+
+jobs:
+  windows-installer:
+    name: Jarvis Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install dependencies
+        shell: pwsh
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        shell: pwsh
+        run: pnpm typecheck
+
+      - name: Test
+        shell: pwsh
+        run: pnpm test
+
+      - name: Prepare bundled Jarvis Core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $resourceRoot = Join-Path $PWD 'apps/desktop/src-tauri/resources/core'
+          $appRoot = Join-Path $resourceRoot 'app'
+          New-Item -ItemType Directory -Force -Path $resourceRoot | Out-Null
+
+          $nodeExe = (Get-Command node.exe).Source
+          Copy-Item $nodeExe (Join-Path $resourceRoot 'node.exe') -Force
+
+          if (Test-Path $appRoot) { Remove-Item $appRoot -Recurse -Force }
+          pnpm --filter @jarvis/core deploy --prod $appRoot
+
+          if (-not (Test-Path (Join-Path $appRoot 'src/main.ts'))) {
+            throw 'Core deploy did not contain src/main.ts'
+          }
+          if (-not (Test-Path (Join-Path $appRoot 'node_modules/tsx'))) {
+            throw 'Core deploy did not contain tsx runtime'
+          }
+          if (-not (Test-Path (Join-Path $appRoot 'node_modules/better-sqlite3'))) {
+            throw 'Core deploy did not contain better-sqlite3'
+          }
+
+      - name: Smoke-test bundled Core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = Join-Path $PWD 'apps/desktop/src-tauri/resources/core'
+          $appRoot = Join-Path $runtime 'app'
+          $node = Join-Path $runtime 'node.exe'
+          $process = Start-Process -FilePath $node -ArgumentList '--import','tsx','src/main.ts' -WorkingDirectory $appRoot -PassThru -WindowStyle Hidden
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Milliseconds 500
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:47821/health' -TimeoutSec 2
+                if ($response.StatusCode -eq 200) { $ready = $true; break }
+              } catch {}
+            }
+            if (-not $ready) { throw 'Bundled Jarvis Core did not become healthy' }
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: pnpm --filter @jarvis/desktop tauri build --bundles nsis
+
+      - name: Locate installer
+        id: installer
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem 'apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe'
+          if ($files.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($files.Count)"
+          }
+          Write-Host "Built $($files[0].FullName)"
+
+      - name: Upload Jarvis installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-Windows-x64-Setup
+          path: apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
