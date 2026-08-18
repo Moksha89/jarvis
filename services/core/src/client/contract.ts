@@ -5,6 +5,7 @@ import type {
   PathScope,
   PermissionProfileId,
   PermissionRule,
+  Plan,
   RiskLevel,
   SavedTaskInput,
   WorkflowInput,
@@ -91,6 +92,15 @@ export interface SetWorkflowEnabledBody {
 export interface RunWorkflowBody {
   input?: string;
 }
+
+export interface PlanBody {
+  /** What the user wants, in their own words. */
+  goal: string;
+  model?: string;
+}
+
+/** Runs a plan: either the one Jarvis proposed, or the same plan with edited steps. */
+export type RunPlanBody = Plan;
 
 export interface SetProfileBody {
   profile: PermissionProfileId;
