@@ -22,6 +22,7 @@ import { PageHeader } from '../components/PageHeader.js';
 import {
   useKnowledgeActions,
   useKnowledgeDocuments,
+  useKnowledgeProgress,
   useKnowledgeSources,
   useKnowledgeStats,
 } from '../queries.js';
@@ -61,6 +62,7 @@ export function KnowledgePage() {
   const sources = useKnowledgeSources();
   const stats = useKnowledgeStats();
   const actions = useKnowledgeActions();
+  const progress = useKnowledgeProgress();
   const [path, setPath] = useState('');
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -141,11 +143,20 @@ export function KnowledgePage() {
                 source.lastIndexedAt ? ` · indexed ${new Date(source.lastIndexedAt).toLocaleString()}` : ''
               }`}
             </Caption1>
+            {progress[source.id] ? (
+              <Caption1 className={styles.meta}>
+                {`Reading · ${progress[source.id]?.filesSeen ?? 0} files seen · ${
+                  progress[source.id]?.chunksWritten ?? 0
+                } passages written`}
+              </Caption1>
+            ) : null}
             {source.error ? <Caption1 className={styles.meta}>{source.error}</Caption1> : null}
             <div className={styles.actions}>
               <Button
                 size="small"
-                disabled={source.status === 'indexing' || actions.reindex.isPending}
+                // Only a pass in this session blocks a reindex: a status left behind by a
+                // closed app must not lock the user out of the one action that fixes it.
+                disabled={progress[source.id] !== undefined || actions.reindex.isPending}
                 onClick={() => actions.reindex.mutate(source.id)}
               >
                 Reindex

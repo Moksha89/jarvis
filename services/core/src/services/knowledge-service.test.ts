@@ -59,6 +59,8 @@ class WordVectorRuntime implements ModelRuntimeAdapter {
 
 interface Harness {
   db: JarvisDatabase;
+  /** Mutable, so a test can revoke a scope after indexing. */
+  scopes: PathScope[];
   conversations: ConversationStore;
   store: KnowledgeStore;
   service: KnowledgeService;
@@ -83,7 +85,7 @@ function harness(workspace: string, patch: Partial<JarvisSettings> = {}): Harnes
     settings: () => settings,
     bus,
   });
-  return { db, conversations: new ConversationStore(db), store, service, runtime, bus, settings };
+  return { db, scopes, conversations: new ConversationStore(db), store, service, runtime, bus, settings };
 }
 
 describe('chunkText', () => {
@@ -216,6 +218,7 @@ describe('KnowledgeService', () => {
     const conversation = open.conversations.create({ mode: 'ask', title: 'Holiday plans' });
     await open.service.remember({
       conversationId: conversation.id,
+      messageId: 'message-1',
       title: 'Holiday plans',
       question: 'When is the holiday?',
       answer: 'The holiday starts on the 4th.',
@@ -231,7 +234,7 @@ describe('KnowledgeService', () => {
   it('never fails a turn because remembering failed', async () => {
     open = harness(workspace, { rememberConversations: false });
     await expect(
-      open.service.remember({ conversationId: 'c', title: 't', question: 'q', answer: 'a' }),
+      open.service.remember({ conversationId: 'c', messageId: 'm', title: 't', question: 'q', answer: 'a' }),
     ).resolves.toBeUndefined();
     expect(open.runtime.batches).toHaveLength(0);
   });
@@ -242,6 +245,49 @@ describe('KnowledgeService', () => {
     const stats = await open.service.stats();
     expect(stats).toMatchObject({ ready: false, embeddingModel: 'test-embed' });
     expect(stats.message).toContain('not installed');
+  });
+
+  it('replaces what it remembered for a turn instead of keeping the discarded answer', async () => {
+    open = harness(workspace);
+    const conversation = open.conversations.create({ mode: 'ask', title: 'Holiday plans' });
+    const turn = { conversationId: conversation.id, messageId: 'message-1', title: 'Holiday plans' };
+    await open.service.remember({ ...turn, question: 'When is the holiday?', answer: 'The holiday is on the 4th.' });
+    await open.service.remember({ ...turn, question: 'When is the holiday?', answer: 'The holiday is on the 9th.' });
+
+    const hits = await open.service.search('holiday', { corpus: 'conversations' });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.text).toContain('9th');
+
+    open.service.forgetMessages(['message-1']);
+    expect(await open.service.search('holiday', { corpus: 'conversations' })).toEqual([]);
+  });
+
+  it('stops retrieving a file once its folder scope is revoked, and forgets it', async () => {
+    writeFileSync(join(workspace, 'budget.md'), 'The budget for Q3 is fixed.', 'utf8');
+    open = harness(workspace);
+    const source = open.store.addSource({ path: workspace, kind: 'folder' });
+    await open.service.indexSource(source.id);
+    expect(await open.service.search('budget')).toHaveLength(1);
+
+    open.scopes.length = 0;
+    expect(await open.service.search('budget')).toEqual([]);
+    expect(open.service.listDocuments(source.id)).toEqual([]);
+  });
+
+  it('clears an indexing status left behind by a crash so the source can be reindexed', async () => {
+    open = harness(workspace);
+    const source = open.store.addSource({ path: workspace, kind: 'folder' });
+    open.store.setSourceStatus(source.id, 'indexing');
+
+    // A new service is what a restart looks like: nothing can be indexing yet.
+    new KnowledgeService({
+      store: open.store,
+      runtime: open.runtime,
+      guard: createPathGuard(() => open?.scopes ?? []),
+      settings: () => open?.settings ?? DEFAULT_SETTINGS,
+      bus: open.bus,
+    });
+    expect(open.store.getSource(source.id)?.status).toBe('idle');
   });
 
   it('counts chunks embedded by another model as stale', async () => {

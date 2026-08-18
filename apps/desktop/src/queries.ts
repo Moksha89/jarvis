@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
-import type { AuditQuery, KnowledgeCorpus, PermissionProfileId, SavedTaskInput } from '@jarvis/types';
+import { useEffect, useState } from 'react';
+import type {
+  AuditQuery,
+  KnowledgeCorpus,
+  KnowledgeIndexProgress,
+  PermissionProfileId,
+  SavedTaskInput,
+} from '@jarvis/types';
 import type { CoreSettingsDto } from '@jarvis/core/client';
 import { coreClient } from './core-client.js';
 
@@ -171,6 +177,29 @@ export function useSetProfile() {
   });
 }
 
+/**
+ * Live indexing counts, held as component state instead of the query cache: progress
+ * arrives once per file and is stale the moment it is read.
+ */
+export function useKnowledgeProgress(): Record<string, KnowledgeIndexProgress> {
+  const [progress, setProgress] = useState<Record<string, KnowledgeIndexProgress>>({});
+  useEffect(() => {
+    return coreClient.subscribe((event) => {
+      if (event.name !== 'knowledge.index.progress') return;
+      const update = event.payload;
+      setProgress((previous) => {
+        if (update.done) {
+          const rest = { ...previous };
+          delete rest[update.sourceId];
+          return rest;
+        }
+        return { ...previous, [update.sourceId]: update };
+      });
+    });
+  }, []);
+  return progress;
+}
+
 /** Bridges Core's SSE event stream into TanStack Query cache invalidation. */
 export function useCoreEvents(): void {
   const queryClient = useQueryClient();
@@ -201,8 +230,13 @@ export function useCoreEvents(): void {
           break;
         case 'knowledge.source.changed':
         case 'knowledge.source.deleted':
-        case 'knowledge.index.progress':
           void queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+          break;
+        case 'knowledge.index.progress':
+          // One event per file: refetching here would re-query Core (and Ollama, for
+          // stats) thousands of times for one folder. Live counts come from
+          // `useKnowledgeProgress`; the finished index invalidates once.
+          if (event.payload.done) void queryClient.invalidateQueries({ queryKey: ['knowledge'] });
           break;
         case 'runtime.status':
           void queryClient.invalidateQueries({ queryKey: queryKeys.status });

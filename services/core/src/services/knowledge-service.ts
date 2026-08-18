@@ -44,6 +44,9 @@ export class KnowledgeService {
     this.guard = options.guard;
     this.settings = options.settings;
     this.bus = options.bus;
+    // A source left "indexing" by a crash would otherwise stay stuck there forever,
+    // and the UI disables its only recovery action while a source reads as indexing.
+    this.store.clearStaleIndexingStatus();
   }
 
   listSources(): KnowledgeSource[] {
@@ -154,12 +157,37 @@ export class KnowledgeService {
     const model = this.settings().embeddingModel;
     const [embedding] = await this.runtime.embed({ model, input: [text] });
     if (!embedding) return [];
-    return this.store.search(Float32Array.from(embedding), {
+    const hits = this.store.search(Float32Array.from(embedding), {
       model,
       limit: options.limit,
       corpus: options.corpus,
       minScore: options.minScore,
     });
+    return this.dropUnreadable(hits);
+  }
+
+  /**
+   * Chunk text is stored verbatim, so a passage indexed while a folder was in scope
+   * would keep answering questions after that scope is revoked. Retrieval re-checks the
+   * guard and forgets what it may no longer read, so Permissions stays the single answer
+   * to "can Jarvis see this file".
+   */
+  private dropUnreadable(hits: readonly KnowledgeHit[]): KnowledgeHit[] {
+    const allowed: KnowledgeHit[] = [];
+    for (const hit of hits) {
+      if (hit.corpus !== 'files') {
+        allowed.push(hit);
+        continue;
+      }
+      try {
+        this.guard.assert(hit.source, 'read');
+        allowed.push(hit);
+      } catch {
+        if (hit.documentId) this.store.deleteDocument(hit.documentId);
+        this.warn(`Forgot passages from "${hit.source}": it is no longer inside an allowed path.`);
+      }
+    }
+    return allowed;
   }
 
   /**
@@ -207,7 +235,13 @@ export class KnowledgeService {
    * Embeds a finished turn so a later conversation can recall it. Best effort: failing
    * to remember must not fail the answer the user already has.
    */
-  async remember(input: { conversationId: string; title: string; question: string; answer: string }): Promise<void> {
+  async remember(input: {
+    conversationId: string;
+    messageId: string;
+    title: string;
+    question: string;
+    answer: string;
+  }): Promise<void> {
     const settings = this.settings();
     if (!settings.rememberConversations) return;
     const text = `Q: ${input.question.trim()}\nA: ${input.answer.trim()}`.slice(
@@ -218,10 +252,14 @@ export class KnowledgeService {
     try {
       const [embedding] = await this.runtime.embed({ model: settings.embeddingModel, input: [text] });
       if (!embedding) return;
+      // A regenerated answer replaces what was remembered, so the discarded answer
+      // cannot be quoted back to the user later.
+      this.store.deleteMessageChunks([input.messageId]);
       this.store.insertChunk(
         {
           corpus: 'conversations',
           conversationId: input.conversationId,
+          messageId: input.messageId,
           source: input.title,
           title: input.title,
           ordinal: Date.now(),
@@ -237,6 +275,11 @@ export class KnowledgeService {
 
   forgetConversation(conversationId: string): void {
     this.store.deleteConversationChunks(conversationId);
+  }
+
+  /** Called when a retry drops messages: their memory goes with them. */
+  forgetMessages(messageIds: readonly string[]): void {
+    this.store.deleteMessageChunks(messageIds);
   }
 
   async stats(): Promise<KnowledgeStats> {
