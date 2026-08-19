@@ -86,12 +86,16 @@ export class WorkflowStore {
     }
   }
 
+  /**
+   * Editing a plan makes it the user's own: the steps are theirs now, so it stops being
+   * something `prunePlans` may throw away to make room for a newer plan.
+   */
   update(id: string, input: WorkflowInput): Workflow {
     const existing = this.require(id);
     const validated = validateWorkflow(input);
     this.db
       .prepare(
-        `UPDATE workflows SET name = ?, description = ?, steps_json = ?, model = ?, enabled = ?, updated_at = ?
+        `UPDATE workflows SET name = ?, description = ?, steps_json = ?, model = ?, enabled = ?, source = 'user', updated_at = ?
          WHERE id = ?`,
       )
       .run(

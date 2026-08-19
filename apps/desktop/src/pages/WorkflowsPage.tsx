@@ -216,8 +216,8 @@ export function WorkflowsPage() {
                 }`}
               </Caption1>
             ))}
-            {plan.notes.map((note) => (
-              <Caption1 key={note} className={styles.meta}>
+            {plan.notes.map((note, index) => (
+              <Caption1 key={index} className={styles.meta}>
                 {note}
               </Caption1>
             ))}
