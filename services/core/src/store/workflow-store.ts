@@ -40,9 +40,13 @@ interface WorkflowRunRow {
 export class WorkflowStore {
   constructor(private readonly db: JarvisDatabase) {}
 
+  /** How many workflows are stored, so a caller can make room before it saves one. */
+  count(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM workflows').get() as { n: number }).n;
+  }
+
   create(input: WorkflowInput, origin: { source?: WorkflowSource; goal?: string } = {}): Workflow {
-    const count = this.db.prepare('SELECT COUNT(*) AS n FROM workflows').get() as { n: number };
-    if (count.n >= WORKFLOW_LIMITS.maxWorkflows) {
+    if (this.count() >= WORKFLOW_LIMITS.maxWorkflows) {
       throw new Error(`Jarvis keeps at most ${WORKFLOW_LIMITS.maxWorkflows} workflows. Delete one first.`);
     }
     const validated = validateWorkflow(input);

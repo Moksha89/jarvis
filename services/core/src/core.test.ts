@@ -219,7 +219,7 @@ describe('JarvisCore tool gating and audit', () => {
     core.cancelWorkflowRun(started.run.id);
   });
 
-  it('keeps no saved plan behind when the run cannot start', () => {
+  it('keeps no saved plan behind when the run cannot start', async () => {
     const plan = {
       goal: 'read the notes',
       summary: 'Read the notes',
@@ -228,11 +228,19 @@ describe('JarvisCore tool gating and audit', () => {
       model: 'test-model',
       fallback: false,
     };
+    // Fill the plan shelf first, so a needless prune would be visible as a lost plan.
+    for (let i = 0; i < PLAN_LIMITS.maxKept; i += 1) {
+      core.cancelWorkflowRun(core.runPlan(plan).run.id);
+      // A cancelled run only frees its slot once the runner notices the abort.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     const started = Array.from({ length: WORKFLOW_LIMITS.maxConcurrentRuns }, () => core.runPlan(plan));
-    const savedBefore = core.listWorkflows().length;
+    const savedBefore = core.listWorkflows().map((entry) => entry.id);
 
     expect(() => core.runPlan(plan)).toThrow(/at once|running/i);
-    expect(core.listWorkflows()).toHaveLength(savedBefore);
+    // Nothing new is kept, and no earlier plan was evicted to make room for a run that
+    // never happened.
+    expect(core.listWorkflows().map((entry) => entry.id)).toEqual(savedBefore);
 
     for (const run of started) core.cancelWorkflowRun(run.run.id);
   });
