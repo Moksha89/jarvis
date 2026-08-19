@@ -23,6 +23,9 @@ Rules:
   Its "mode" is "agent" when the model may use tools itself, otherwise "ask".
 - A later step reads earlier output with {{input}}, {{step1}}, {{step2}} or {{previous}}.
 - Keep it to the fewest steps that finish the job, at most ${PLAN_LIMITS.maxSteps}.
+- When no listed tool can do part of the job, plan an "agent" prompt step that says which
+  ability is missing: Jarvis can look for a skill and add one to itself with skills.find
+  and skills.install.
 - Never invent file names, paths or commands the user did not give you. When a detail is
   missing, plan a step that finds it out instead of guessing.
 - Output the JSON object only: no prose, no code fences, no explanation.`;

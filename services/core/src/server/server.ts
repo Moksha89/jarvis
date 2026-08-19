@@ -383,6 +383,10 @@ function buildRouter(core: JarvisCore): Router {
     ctx.send(200, { ok: true });
   });
 
+  // The catalog of skills Jarvis may add to itself. Installing goes through the ordinary
+  // tool route, so it is gated and audited like any other high-risk action.
+  router.get('/api/skills/catalog', (ctx) => ctx.send(200, core.findSkills(ctx.query.get('need') ?? '')));
+
   router.get('/api/workflows', (ctx) => ctx.send(200, core.listWorkflows()));
   router.post('/api/workflows', async (ctx) => {
     const body = await ctx.json<WorkflowBody>();

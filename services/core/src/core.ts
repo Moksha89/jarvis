@@ -8,6 +8,7 @@ import type {
   ChatStreamEvent,
   Conversation,
   ChatMessage,
+  InstalledSkill,
   JarvisTool,
   KnowledgeDocument,
   KnowledgeHit,
@@ -26,6 +27,8 @@ import type {
   ResourceSnapshot,
   SavedTask,
   SavedTaskInput,
+  SkillCatalogEntry,
+  SkillMatch,
   SystemStatus,
   Task,
   TaskRun,
@@ -43,6 +46,7 @@ import {
   createFilesystemTools,
   createPathGuard,
   createShellTools,
+  createSkillTools,
   PlaywrightBrowserBridge,
   ToolRegistry,
 } from '@jarvis/tools';
@@ -60,6 +64,7 @@ import { AgentRunner } from './services/agent-runner.js';
 import { ChatService } from './services/chat-service.js';
 import { KnowledgeService } from './services/knowledge-service.js';
 import { McpManager, type McpConnect } from './services/mcp-manager.js';
+import { SkillInstaller } from './services/skill-installer.js';
 import { createKnowledgeSearchTool } from './services/knowledge-tool.js';
 import { ModelRouter } from './services/model-router.js';
 import { Planner } from './services/planner.js';
@@ -81,6 +86,8 @@ export interface JarvisCoreOptions {
   enableSkillServers?: boolean;
   /** Test seam: connect to a skill server without spawning a process. */
   mcpConnect?: McpConnect;
+  /** Test seam: a catalog of skills that need no real package. */
+  skillCatalog?: readonly SkillCatalogEntry[];
 }
 
 export interface ToolDescriptor {
@@ -119,6 +126,7 @@ export class JarvisCore {
   private readonly browserBridge = new PlaywrightBrowserBridge();
   private readonly mcpStore: McpStore;
   private readonly mcp: McpManager;
+  private readonly skills: SkillInstaller;
   private readonly workflowStore: WorkflowStore;
   private readonly workflows: WorkflowRunner;
   private readonly router: ModelRouter;
@@ -227,6 +235,16 @@ export class JarvisCore {
     // delays startup, so a broken server shows as disconnected instead of hanging Core.
     if (options.enableSkillServers !== false) {
       void this.mcp.start();
+    }
+    this.skills = new SkillInstaller({ manager: this.mcp, catalog: options.skillCatalog });
+    // Finding and adding a skill are ordinary tools, so Jarvis can extend itself mid-task
+    // and the spawn still passes the permission gate and the audit trail.
+    for (const tool of createSkillTools({
+      entries: () => this.skills.entries(),
+      find: (need) => this.skills.find(need),
+      install: (skillId) => this.installSkill(skillId),
+    })) {
+      this.registry.register(tool);
     }
 
     this.workflowStore = new WorkflowStore(this.db);
@@ -562,6 +580,41 @@ export class JarvisCore {
 
   async reconnectSkillServer(id: string): Promise<McpServer> {
     return await this.mcp.reconnect(id);
+  }
+
+  // ---------------------------------------------------------------- skill catalog
+
+  findSkills(need: string): SkillMatch[] {
+    return this.skills.find(need);
+  }
+
+  /**
+   * Adds a curated skill. Reached either from the Skills page or from the `skills.install`
+   * tool, which is where the approval for a first spawn comes from; both are audited, since
+   * the skill's own process runs outside the tool sandbox.
+   */
+  async installSkill(skillId: string): Promise<InstalledSkill> {
+    const entry = this.skills.entries().find((candidate) => candidate.id === skillId);
+    this.auditSkillServerChange(
+      'install-skill',
+      entry?.name ?? skillId,
+      `Adding catalog skill ${skillId}: ${entry ? `${entry.command} ${entry.args.join(' ')}`.trim() : 'unknown definition'}.`,
+      4,
+    );
+    try {
+      const installed = await this.skills.install(skillId);
+      this.auditSkillServerChange(
+        'install-skill',
+        installed.name,
+        `Catalog skill ${installed.name} is running with ${String(installed.toolIds.length)} tool(s).`,
+        3,
+      );
+      return installed;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.auditSkillServerChange('install-skill', entry?.name ?? skillId, `Catalog skill was not added: ${message}`, 1);
+      throw error;
+    }
   }
 
   async deleteSkillServer(id: string): Promise<void> {

@@ -9,3 +9,4 @@ export * from './desktop-bridge.js';
 export * from './desktop.js';
 export * from './browser-bridge.js';
 export * from './browser.js';
+export * from './skills.js';
