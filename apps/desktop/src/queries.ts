@@ -8,6 +8,7 @@ import type {
   DesktopElement,
   DesktopShot,
   DesktopWindow,
+  InstalledSkill,
   KnowledgeCorpus,
   KnowledgeIndexProgress,
   McpServerInput,
@@ -38,6 +39,7 @@ export const queryKeys = {
   knowledgeStats: ['knowledge', 'stats'] as const,
   knowledgeDocuments: (sourceId: string) => ['knowledge', 'documents', sourceId] as const,
   skillServers: ['skills', 'servers'] as const,
+  skillCatalog: ['skills', 'catalog'] as const,
   workflows: ['workflows'] as const,
   workflowRuns: ['workflow-runs'] as const,
 };
@@ -219,6 +221,11 @@ export function useKnowledgeActions() {
   return { addSource, removeSource, reindex, search };
 }
 
+/** The skills Jarvis can add to itself, so the list need not be typed out by hand. */
+export function useSkillCatalog() {
+  return useQuery({ queryKey: queryKeys.skillCatalog, queryFn: () => coreClient.findSkills() });
+}
+
 export function useSkillServers() {
   return useQuery({ queryKey: queryKeys.skillServers, queryFn: () => coreClient.listSkillServers() });
 }
@@ -247,8 +254,18 @@ export function useSkillServerActions() {
     onSuccess: invalidate,
   });
   const remove = useMutation({ mutationFn: (id: string) => coreClient.deleteSkillServer(id), onSuccess: invalidate });
+  // Installing goes through the tool path rather than a dedicated route, so the first
+  // spawn of a skill asks for approval and is audited like any other high-risk call.
+  const install = useMutation({
+    mutationFn: async (skillId: string): Promise<InstalledSkill | undefined> =>
+      unwrapToolCall<InstalledSkill>(await coreClient.callTool('skills.install', { skillId })),
+    onSuccess: () => {
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.skillCatalog });
+    },
+  });
 
-  return { add, setEnabled, reconnect, remove };
+  return { add, setEnabled, reconnect, remove, install };
 }
 
 /**

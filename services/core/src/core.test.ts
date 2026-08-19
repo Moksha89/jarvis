@@ -36,6 +36,8 @@ describe('JarvisCore tool gating and audit', () => {
       'knowledge.search',
       'shell.classify',
       'shell.run',
+      'skills.find',
+      'skills.install',
     ]);
     // The desktop tools drive Win32 and UI Automation, so they only exist on Windows.
     const desktop = ids.filter((id) => id.startsWith('desktop.'));
@@ -289,6 +291,86 @@ describe('skill server tools awaiting approval', () => {
     const events = core.queryAudit({ toolId: 'skills' });
     expect(events.map((event) => event.action)).toEqual(['delete-server', 'disable-server', 'add-server']);
     expect(events.at(-1)?.detail).toMatch(/fake --stdio/);
+  });
+});
+
+describe('adding a skill to itself', () => {
+  let core: JarvisCore;
+
+  beforeEach(() => {
+    core = new JarvisCore({
+      databaseFile: ':memory:',
+      enableAgent: false,
+      enableScheduler: false,
+      skillCatalog: [
+        {
+          id: 'memory',
+          name: 'memory',
+          summary: 'Remembers things between conversations.',
+          capabilities: ['remember', 'recall'],
+          command: 'node',
+          args: ['fake-memory.js'],
+          package: 'fake-memory@1.0.0',
+          trust: 'normal',
+        },
+      ],
+      mcpConnect: () =>
+        Promise.resolve({
+          listTools: () => Promise.resolve({ tools: [{ name: 'store', description: 'Store a fact.' }] }),
+          callTool: () => Promise.resolve({ content: [{ type: 'text', text: 'stored' }] }),
+          close: () => Promise.resolve(),
+        }),
+    });
+  });
+
+  afterEach(async () => {
+    await core.close();
+  });
+
+  it('finds a skill for a missing ability without asking permission', async () => {
+    const call = await core.callTool('skills.find', { need: 'remember what I told you last week' });
+    expect(call.status).toBe('succeeded');
+    expect(call.result?.summary).toMatch(/memory/);
+  });
+
+  it('waits for approval before it runs a skill for the first time, then registers its tools', async () => {
+    const call = await core.callTool('skills.install', { skillId: 'memory' });
+    // Installing starts a program on this machine, so it is never silent.
+    expect(call.status).toBe('pending-approval');
+    const [approval] = core.listApprovals({ pendingOnly: true });
+    expect(approval?.riskLevel).toBe(3);
+    expect(approval?.target).toBe('fake-memory@1.0.0');
+    // Running a program is high risk, so the phrase is typed out rather than a click.
+    expect(approval?.decision.requiresConfirmationPhrase).toBe(true);
+
+    const finished = await core.approve(approval!.id, { confirmationPhrase: CONFIRMATION_PHRASE });
+    expect(finished.status).toBe('succeeded');
+    expect(core.listTools().map((tool) => tool.id)).toContain('mcp.memory.store');
+    expect(core.listSkillServers().map((server) => server.name)).toEqual(['memory']);
+
+    const audit = core.queryAudit({ toolId: 'skills' });
+    expect(audit.map((event) => event.action)).toEqual(['install-skill', 'install-skill']);
+  });
+
+  it('adds nothing when the approval is refused', async () => {
+    await core.callTool('skills.install', { skillId: 'memory' });
+    const [approval] = core.listApprovals({ pendingOnly: true });
+    const denied = await core.deny(approval!.id, 'Not now.');
+
+    expect(denied.status).toBe('denied');
+    expect(core.listSkillServers()).toEqual([]);
+    expect(core.queryAudit({ toolId: 'skills' })).toEqual([]);
+  });
+
+  it('refuses a skill that is not in the catalog, whatever it is asked to run', async () => {
+    const call = await core.callTool('skills.install', { skillId: 'npx -y something-else' });
+    const [approval] = core.listApprovals({ pendingOnly: true });
+    const finished = await core.approve(approval!.id, { confirmationPhrase: CONFIRMATION_PHRASE });
+
+    expect(call.status).toBe('pending-approval');
+    expect(finished.status).toBe('failed');
+    expect(finished.result?.error).toMatch(/no skill/i);
+    expect(core.listSkillServers()).toEqual([]);
   });
 });
 

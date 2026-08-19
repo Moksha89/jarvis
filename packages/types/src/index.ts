@@ -11,5 +11,6 @@ export * from './system.js';
 export * from './desktop.js';
 export * from './browser.js';
 export * from './mcp.js';
+export * from './skill.js';
 export * from './workflow.js';
 export * from './plan.js';

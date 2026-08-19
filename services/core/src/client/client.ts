@@ -21,6 +21,7 @@ import type {
   PlanRunStart,
   ResourceSnapshot,
   SavedTask,
+  SkillMatch,
   SystemStatus,
   Task,
   TaskRun,
@@ -254,6 +255,11 @@ export class JarvisClient {
   }
   deleteSkillServer(id: string): Promise<{ ok: boolean }> {
     return this.delete(`/api/skills/servers/${encodeURIComponent(id)}`);
+  }
+
+  /** The skills Jarvis can add itself; `need` narrows them to a described ability. */
+  findSkills(need = ''): Promise<SkillMatch[]> {
+    return this.get(`/api/skills/catalog?need=${encodeURIComponent(need)}`);
   }
 
   listWorkflows(): Promise<Workflow[]> {

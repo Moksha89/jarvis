@@ -121,6 +121,16 @@ describe('Core knowledge routes', () => {
     expect(response.status).toBeGreaterThanOrEqual(400);
   });
 
+  it('serves the skill catalog and narrows it to a described need', async () => {
+    const all = (await (await fetch(`${base}/api/skills/catalog`)).json()) as { entry: { id: string } }[];
+    expect(all.length).toBeGreaterThan(0);
+
+    const matched = (await (
+      await fetch(`${base}/api/skills/catalog?need=${encodeURIComponent('remember what I said')}`)
+    ).json()) as { entry: { id: string } }[];
+    expect(matched.map((match) => match.entry.id)).toEqual(['memory']);
+  });
+
   it('says what is wrong with a malformed planning request', async () => {
     const post = (path: string, body: unknown) =>
       fetch(`${base}${path}`, {

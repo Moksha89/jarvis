@@ -20,7 +20,7 @@ import {
 import type { McpTrust } from '@jarvis/types';
 import { jarvisSpacing } from '@jarvis/ui';
 import { PageHeader } from '../components/PageHeader.js';
-import { useSkillServerActions, useSkillServers } from '../queries.js';
+import { useSkillCatalog, useSkillServerActions, useSkillServers } from '../queries.js';
 
 const useStyles = makeStyles({
   card: { padding: jarvisSpacing.m, display: 'flex', flexDirection: 'column', gap: jarvisSpacing.s },
@@ -47,6 +47,7 @@ const trustLabels: Record<McpTrust, string> = {
 export function SkillsPage() {
   const styles = useStyles();
   const servers = useSkillServers();
+  const catalog = useSkillCatalog();
   const actions = useSkillServerActions();
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
@@ -54,7 +55,12 @@ export function SkillsPage() {
   const [trust, setTrust] = useState<McpTrust>('read-only');
 
   const error =
-    servers.error ?? actions.add.error ?? actions.setEnabled.error ?? actions.reconnect.error ?? actions.remove.error;
+    servers.error ??
+    actions.add.error ??
+    actions.setEnabled.error ??
+    actions.reconnect.error ??
+    actions.remove.error ??
+    actions.install.error;
   const list = servers.data ?? [];
 
   const addServer = () => {
@@ -88,6 +94,35 @@ export function SkillsPage() {
           <MessageBarBody>{(error as Error).message}</MessageBarBody>
         </MessageBar>
       ) : null}
+
+      <div className={styles.section}>
+        <Card className={styles.card}>
+          <CardHeader header={<Subtitle2>Skills Jarvis can add by itself</Subtitle2>} />
+          <Caption1 className={styles.meta}>
+            Jarvis picks from this list on its own when a job needs an ability it has no tool for. It asks first, because
+            adding one starts a program on this machine.
+          </Caption1>
+          {(catalog.data ?? []).map((match) => (
+            <div className={styles.row} key={match.entry.id}>
+              <div className={styles.grow}>
+                <Body1>{match.entry.name}</Body1>
+                <Caption1 className={styles.meta}>{match.entry.summary}</Caption1>
+                <Caption1 className={styles.mono}>{match.entry.package ?? match.entry.command}</Caption1>
+              </div>
+              {match.installed ? (
+                <Badge appearance="tint" color="success">
+                  added
+                </Badge>
+              ) : (
+                <Button disabled={actions.install.isPending} onClick={() => actions.install.mutate(match.entry.id)}>
+                  Add now
+                </Button>
+              )}
+            </div>
+          ))}
+          {actions.install.isPending ? <Spinner size="tiny" /> : null}
+        </Card>
+      </div>
 
       <div className={styles.section}>
         <Card className={styles.card}>
