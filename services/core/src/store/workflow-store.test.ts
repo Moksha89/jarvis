@@ -107,6 +107,17 @@ describe('WorkflowStore', () => {
     expect(store.get((plans[1] as { id: string }).id)).toBeUndefined();
   });
 
+  it('keeps a plan the user edited, because editing it makes it theirs', () => {
+    const step = [{ kind: 'prompt' as const, title: 'x', prompt: 'go' }];
+    const plan = store.create({ name: 'Plan', steps: step }, { source: 'planner', goal: 'g' });
+
+    const edited = store.update(plan.id, { name: 'My version', steps: step });
+    store.prunePlans(0);
+
+    expect(edited.source).toBe('user');
+    expect(store.get(plan.id)).toBeDefined();
+  });
+
   it('deletes a workflow together with its run history', () => {
     const workflow = store.create({ name: 'Gone', steps: [{ kind: 'prompt', title: 'x', prompt: 'go' }] });
     store.startRun(workflow.id);

@@ -465,7 +465,15 @@ export class JarvisCore {
       { source: 'planner', goal },
     );
     this.bus.emit('workflow.changed', workflow);
-    return { plan, workflowId: workflow.id, run: this.workflows.runNow(workflow.id, goal) };
+    try {
+      return { plan, workflowId: workflow.id, run: this.workflows.runNow(workflow.id, goal) };
+    } catch (error) {
+      // The run never started, so the recipe Jarvis saved for it is junk: keeping it would
+      // leave the user deleting plans that did nothing and would evict a real one.
+      this.workflowStore.delete(workflow.id);
+      this.bus.emit('workflow.deleted', { id: workflow.id });
+      throw error;
+    }
   }
 
   /** Plan and act in one go: what the user gets from typing a sentence and pressing go. */

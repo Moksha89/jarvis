@@ -1,5 +1,5 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AuditQuery, ChatMode, PermissionProfileId } from '@jarvis/types';
+import type { AuditQuery, ChatMode, PermissionProfileId, Plan, WorkflowStepInput } from '@jarvis/types';
 import { isRiskLevel } from '@jarvis/types';
 import { JarvisCore, type JarvisCoreOptions } from '../core.js';
 import {
@@ -421,15 +421,14 @@ function buildRouter(core: JarvisCore): Router {
   // and `/do` is both in one request for the plain "just do this" path.
   router.post('/api/plan', async (ctx) => {
     const body = await ctx.json<PlanBody>();
-    ctx.send(200, await core.planGoal(body.goal ?? '', body.model));
+    ctx.send(200, await core.planGoal(stringField(body.goal, 'goal'), optionalString(body.model, 'model')));
   });
   router.post('/api/plan/run', async (ctx) => {
-    const body = await ctx.json<RunPlanBody>();
-    ctx.send(200, core.runPlan(body));
+    ctx.send(200, core.runPlan(parsePlan(await ctx.json<unknown>())));
   });
   router.post('/api/do', async (ctx) => {
     const body = await ctx.json<PlanBody>();
-    ctx.send(200, await core.doGoal(body.goal ?? '', body.model));
+    ctx.send(200, await core.doGoal(stringField(body.goal, 'goal'), optionalString(body.model, 'model')));
   });
 
   router.get('/api/audit', (ctx) => ctx.send(200, core.queryAudit(parseAuditQuery(ctx))));
@@ -441,6 +440,34 @@ function buildRouter(core: JarvisCore): Router {
   });
 
   return router;
+}
+
+/**
+ * A request body is only JSON until it is checked, so the planning routes say what is
+ * wrong with theirs (a 400) rather than failing on a missing field deeper in Core.
+ */
+function stringField(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new Error(`"${name}" must be text.`);
+  return value;
+}
+
+function optionalString(value: unknown, name: string): string | undefined {
+  return value === undefined || value === null ? undefined : stringField(value, name);
+}
+
+function parsePlan(body: unknown): Plan {
+  if (typeof body !== 'object' || body === null) throw new Error('A plan must be an object.');
+  const candidate = body as Partial<RunPlanBody>;
+  if (typeof candidate.goal !== 'string') throw new Error('"goal" must be text.');
+  if (!Array.isArray(candidate.steps)) throw new Error('"steps" must be a list.');
+  return {
+    goal: candidate.goal,
+    summary: typeof candidate.summary === 'string' ? candidate.summary : '',
+    steps: candidate.steps as WorkflowStepInput[],
+    notes: Array.isArray(candidate.notes) ? candidate.notes.filter((note) => typeof note === 'string') : [],
+    model: typeof candidate.model === 'string' ? candidate.model : '',
+    fallback: candidate.fallback === true,
+  };
 }
 
 function numberParam(ctx: RequestContext, name: string): number | undefined {

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLAN_LIMITS } from '@jarvis/types';
+import { PLAN_LIMITS, WORKFLOW_LIMITS } from '@jarvis/types';
 import { JarvisCore } from './core.js';
 import { CONFIRMATION_PHRASE } from './services/tool-executor.js';
 
@@ -217,6 +217,24 @@ describe('JarvisCore tool gating and audit', () => {
     expect(workflow).toMatchObject({ source: 'planner', goal: 'read the notes' });
     expect(started.run.input).toBe('read the notes');
     core.cancelWorkflowRun(started.run.id);
+  });
+
+  it('keeps no saved plan behind when the run cannot start', () => {
+    const plan = {
+      goal: 'read the notes',
+      summary: 'Read the notes',
+      steps: [{ kind: 'prompt' as const, title: 'Read', prompt: 'about {{input}}', mode: 'ask' as const }],
+      notes: [],
+      model: 'test-model',
+      fallback: false,
+    };
+    const started = Array.from({ length: WORKFLOW_LIMITS.maxConcurrentRuns }, () => core.runPlan(plan));
+    const savedBefore = core.listWorkflows().length;
+
+    expect(() => core.runPlan(plan)).toThrow(/at once|running/i);
+    expect(core.listWorkflows()).toHaveLength(savedBefore);
+
+    for (const run of started) core.cancelWorkflowRun(run.run.id);
   });
 });
 
