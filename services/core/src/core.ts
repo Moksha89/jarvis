@@ -34,7 +34,7 @@ import type {
   WorkflowInput,
   WorkflowRun,
 } from '@jarvis/types';
-import { PLAN_LIMITS } from '@jarvis/types';
+import { PLAN_LIMITS, WORKFLOW_LIMITS } from '@jarvis/types';
 import { EventBus } from '@jarvis/events';
 import { PermissionEngine } from '@jarvis/permissions';
 import {
@@ -454,7 +454,11 @@ export class JarvisCore {
     if (plan.steps.length > PLAN_LIMITS.maxSteps) {
       throw new Error(`A plan runs at most ${PLAN_LIMITS.maxSteps} steps.`);
     }
-    this.workflowStore.prunePlans(PLAN_LIMITS.maxKept - 1);
+    // Only make room up front when there is none left at all: an old plan should not be
+    // dropped for a run that turns out never to start.
+    if (this.workflowStore.count() >= WORKFLOW_LIMITS.maxWorkflows) {
+      this.workflowStore.prunePlans(PLAN_LIMITS.maxKept - 1);
+    }
     const workflow = this.workflowStore.create(
       {
         name: plan.summary.trim().slice(0, 120) || goal.slice(0, 120),
@@ -464,16 +468,19 @@ export class JarvisCore {
       },
       { source: 'planner', goal },
     );
-    this.bus.emit('workflow.changed', workflow);
+    let run: WorkflowRun;
     try {
-      return { plan, workflowId: workflow.id, run: this.workflows.runNow(workflow.id, goal) };
+      run = this.workflows.runNow(workflow.id, goal);
     } catch (error) {
       // The run never started, so the recipe Jarvis saved for it is junk: keeping it would
-      // leave the user deleting plans that did nothing and would evict a real one.
+      // leave the user deleting plans that did nothing.
       this.workflowStore.delete(workflow.id);
-      this.bus.emit('workflow.deleted', { id: workflow.id });
       throw error;
     }
+    this.bus.emit('workflow.changed', workflow);
+    // This plan ran, so it earns its place and the oldest plan beyond the limit gives way.
+    this.workflowStore.prunePlans(PLAN_LIMITS.maxKept);
+    return { plan, workflowId: workflow.id, run };
   }
 
   /** Plan and act in one go: what the user gets from typing a sentence and pressing go. */
