@@ -1,5 +1,5 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AuditQuery, ChatMode, PermissionProfileId } from '@jarvis/types';
+import type { AuditQuery, ChatMode, PermissionProfileId, Plan, WorkflowStepInput } from '@jarvis/types';
 import { isRiskLevel } from '@jarvis/types';
 import { JarvisCore, type JarvisCoreOptions } from '../core.js';
 import {
@@ -19,6 +19,8 @@ import {
   type SetSkillServerEnabledBody,
   type SetTaskEnabledBody,
   type SetWorkflowEnabledBody,
+  type PlanBody,
+  type RunPlanBody,
   type RunWorkflowBody,
   type WorkflowBody,
 } from '../client/contract.js';
@@ -381,6 +383,10 @@ function buildRouter(core: JarvisCore): Router {
     ctx.send(200, { ok: true });
   });
 
+  // The catalog of skills Jarvis may add to itself. Installing goes through the ordinary
+  // tool route, so it is gated and audited like any other high-risk action.
+  router.get('/api/skills/catalog', (ctx) => ctx.send(200, core.findSkills(ctx.query.get('need') ?? '')));
+
   router.get('/api/workflows', (ctx) => ctx.send(200, core.listWorkflows()));
   router.post('/api/workflows', async (ctx) => {
     const body = await ctx.json<WorkflowBody>();
@@ -415,6 +421,20 @@ function buildRouter(core: JarvisCore): Router {
     ctx.send(200, core.cancelWorkflowRun(ctx.params.id as string)),
   );
 
+  // Planning: `/plan` only proposes steps, `/plan/run` runs an approved or edited plan,
+  // and `/do` is both in one request for the plain "just do this" path.
+  router.post('/api/plan', async (ctx) => {
+    const body = await ctx.json<PlanBody>();
+    ctx.send(200, await core.planGoal(stringField(body.goal, 'goal'), optionalString(body.model, 'model')));
+  });
+  router.post('/api/plan/run', async (ctx) => {
+    ctx.send(200, core.runPlan(parsePlan(await ctx.json<unknown>())));
+  });
+  router.post('/api/do', async (ctx) => {
+    const body = await ctx.json<PlanBody>();
+    ctx.send(200, await core.doGoal(stringField(body.goal, 'goal'), optionalString(body.model, 'model')));
+  });
+
   router.get('/api/audit', (ctx) => ctx.send(200, core.queryAudit(parseAuditQuery(ctx))));
 
   router.get('/api/settings', (ctx) => ctx.send(200, core.getSettings()));
@@ -424,6 +444,34 @@ function buildRouter(core: JarvisCore): Router {
   });
 
   return router;
+}
+
+/**
+ * A request body is only JSON until it is checked, so the planning routes say what is
+ * wrong with theirs (a 400) rather than failing on a missing field deeper in Core.
+ */
+function stringField(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new Error(`"${name}" must be text.`);
+  return value;
+}
+
+function optionalString(value: unknown, name: string): string | undefined {
+  return value === undefined || value === null ? undefined : stringField(value, name);
+}
+
+function parsePlan(body: unknown): Plan {
+  if (typeof body !== 'object' || body === null) throw new Error('A plan must be an object.');
+  const candidate = body as Partial<RunPlanBody>;
+  if (typeof candidate.goal !== 'string') throw new Error('"goal" must be text.');
+  if (!Array.isArray(candidate.steps)) throw new Error('"steps" must be a list.');
+  return {
+    goal: candidate.goal,
+    summary: typeof candidate.summary === 'string' ? candidate.summary : '',
+    steps: candidate.steps as WorkflowStepInput[],
+    notes: Array.isArray(candidate.notes) ? candidate.notes.filter((note) => typeof note === 'string') : [],
+    model: typeof candidate.model === 'string' ? candidate.model : '',
+    fallback: candidate.fallback === true,
+  };
 }
 
 function numberParam(ctx: RequestContext, name: string): number | undefined {

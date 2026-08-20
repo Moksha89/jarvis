@@ -121,6 +121,37 @@ describe('Core knowledge routes', () => {
     expect(response.status).toBeGreaterThanOrEqual(400);
   });
 
+  it('serves the skill catalog and narrows it to a described need', async () => {
+    const all = (await (await fetch(`${base}/api/skills/catalog`)).json()) as { entry: { id: string } }[];
+    expect(all.length).toBeGreaterThan(0);
+
+    const matched = (await (
+      await fetch(`${base}/api/skills/catalog?need=${encodeURIComponent('remember what I said')}`)
+    ).json()) as { entry: { id: string } }[];
+    expect(matched.map((match) => match.entry.id)).toEqual(['memory']);
+  });
+
+  it('says what is wrong with a malformed planning request', async () => {
+    const post = (path: string, body: unknown) =>
+      fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    for (const [path, body, expected] of [
+      ['/api/plan', {}, /"goal" must be text/i],
+      ['/api/do', { goal: 7 }, /"goal" must be text/i],
+      ['/api/plan', { goal: 'tidy up', model: 3 }, /"model" must be text/i],
+      ['/api/plan/run', { goal: 'tidy up' }, /"steps" must be a list/i],
+      ['/api/plan/run', 'not a plan', /must be an object/i],
+    ] as const) {
+      const response = await post(path, body);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error?: string }).error).toMatch(expected);
+    }
+  });
+
   it('requires a query on search', async () => {
     const response = await fetch(`${base}/api/knowledge/search`, {
       method: 'POST',

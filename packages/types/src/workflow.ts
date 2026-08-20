@@ -39,12 +39,18 @@ export interface WorkflowInput {
   enabled?: boolean;
 }
 
+/** Whether the user built this recipe, or Jarvis planned it from something they asked for. */
+export type WorkflowSource = 'user' | 'planner';
+
 export interface Workflow {
   id: string;
   name: string;
   description?: string;
   steps: WorkflowStep[];
   model?: string;
+  source: WorkflowSource;
+  /** For planned recipes: the words Jarvis planned from. */
+  goal?: string;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

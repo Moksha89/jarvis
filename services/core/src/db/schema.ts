@@ -209,6 +209,8 @@ CREATE TABLE IF NOT EXISTS workflows (
   steps_json TEXT NOT NULL,
   model TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'user',
+  goal TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -235,6 +237,8 @@ export const COLUMN_MIGRATIONS: readonly { table: string; column: string; defini
   { table: 'messages', column: 'step_json', definition: 'TEXT' },
   { table: 'messages', column: 'citations_json', definition: 'TEXT' },
   { table: 'knowledge_chunks', column: 'message_id', definition: 'TEXT' },
+  { table: 'workflows', column: 'source', definition: "TEXT NOT NULL DEFAULT 'user'" },
+  { table: 'workflows', column: 'goal', definition: 'TEXT' },
 ];
 
 /**

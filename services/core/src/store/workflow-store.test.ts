@@ -92,6 +92,32 @@ describe('WorkflowStore', () => {
     expect(store.requireRun(stale.id)).toMatchObject({ status: 'failed' });
   });
 
+  it('prunes the oldest plans without touching hand-written workflows or a running plan', () => {
+    const step = [{ kind: 'prompt' as const, title: 'x', prompt: 'go' }];
+    const mine = store.create({ name: 'Mine', steps: step });
+    const plans = [1, 2, 3].map((n) => store.create({ name: `Plan ${String(n)}`, steps: step }, { source: 'planner', goal: 'g' }));
+    store.startRun((plans[0] as { id: string }).id);
+
+    store.prunePlans(1);
+
+    expect(store.get(mine.id)).toBeDefined();
+    // The running plan survives regardless, and the newest idle plan is the one kept.
+    expect(store.get((plans[0] as { id: string }).id)).toBeDefined();
+    expect(store.get((plans[2] as { id: string }).id)).toBeDefined();
+    expect(store.get((plans[1] as { id: string }).id)).toBeUndefined();
+  });
+
+  it('keeps a plan the user edited, because editing it makes it theirs', () => {
+    const step = [{ kind: 'prompt' as const, title: 'x', prompt: 'go' }];
+    const plan = store.create({ name: 'Plan', steps: step }, { source: 'planner', goal: 'g' });
+
+    const edited = store.update(plan.id, { name: 'My version', steps: step });
+    store.prunePlans(0);
+
+    expect(edited.source).toBe('user');
+    expect(store.get(plan.id)).toBeDefined();
+  });
+
   it('deletes a workflow together with its run history', () => {
     const workflow = store.create({ name: 'Gone', steps: [{ kind: 'prompt', title: 'x', prompt: 'go' }] });
     store.startRun(workflow.id);

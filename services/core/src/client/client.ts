@@ -17,8 +17,11 @@ import type {
   PathScope,
   PermissionProfileId,
   PermissionRule,
+  Plan,
+  PlanRunStart,
   ResourceSnapshot,
   SavedTask,
+  SkillMatch,
   SystemStatus,
   Task,
   TaskRun,
@@ -35,6 +38,7 @@ import {
   type ApproveBody,
   type CreateConversationBody,
   type KnowledgeSearchBody,
+  type PlanBody,
   type SavedTaskBody,
   type SendChatBody,
 } from './contract.js';
@@ -253,6 +257,11 @@ export class JarvisClient {
     return this.delete(`/api/skills/servers/${encodeURIComponent(id)}`);
   }
 
+  /** The skills Jarvis can add itself; `need` narrows them to a described ability. */
+  findSkills(need = ''): Promise<SkillMatch[]> {
+    return this.get(`/api/skills/catalog?need=${encodeURIComponent(need)}`);
+  }
+
   listWorkflows(): Promise<Workflow[]> {
     return this.get('/api/workflows');
   }
@@ -280,6 +289,21 @@ export class JarvisClient {
   }
   cancelWorkflowRun(runId: string): Promise<WorkflowRun> {
     return this.post(`/api/workflows/runs/${encodeURIComponent(runId)}/cancel`, {});
+  }
+
+  /** Ask Jarvis what it would do about a request, without doing any of it. */
+  planGoal(goal: string, model?: string): Promise<Plan> {
+    const body: PlanBody = { goal, model };
+    return this.post('/api/plan', body);
+  }
+  /** Run a plan, either as proposed or with its steps edited. */
+  runPlan(plan: Plan): Promise<PlanRunStart> {
+    return this.post('/api/plan/run', plan);
+  }
+  /** Plan and act in one request. */
+  doGoal(goal: string, model?: string): Promise<PlanRunStart> {
+    const body: PlanBody = { goal, model };
+    return this.post('/api/do', body);
   }
 
   queryAudit(query: AuditQuery = {}): Promise<AuditEvent[]> {

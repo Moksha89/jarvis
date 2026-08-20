@@ -8,6 +8,7 @@ import type {
   ChatStreamEvent,
   Conversation,
   ChatMessage,
+  InstalledSkill,
   JarvisTool,
   KnowledgeDocument,
   KnowledgeHit,
@@ -21,9 +22,13 @@ import type {
   PathScope,
   PermissionProfileId,
   PermissionRule,
+  Plan,
+  PlanRunStart,
   ResourceSnapshot,
   SavedTask,
   SavedTaskInput,
+  SkillCatalogEntry,
+  SkillMatch,
   SystemStatus,
   Task,
   TaskRun,
@@ -32,6 +37,7 @@ import type {
   WorkflowInput,
   WorkflowRun,
 } from '@jarvis/types';
+import { PLAN_LIMITS, WORKFLOW_LIMITS } from '@jarvis/types';
 import { EventBus } from '@jarvis/events';
 import { PermissionEngine } from '@jarvis/permissions';
 import {
@@ -40,6 +46,7 @@ import {
   createFilesystemTools,
   createPathGuard,
   createShellTools,
+  createSkillTools,
   PlaywrightBrowserBridge,
   ToolRegistry,
 } from '@jarvis/tools';
@@ -57,8 +64,10 @@ import { AgentRunner } from './services/agent-runner.js';
 import { ChatService } from './services/chat-service.js';
 import { KnowledgeService } from './services/knowledge-service.js';
 import { McpManager, type McpConnect } from './services/mcp-manager.js';
+import { SkillInstaller } from './services/skill-installer.js';
 import { createKnowledgeSearchTool } from './services/knowledge-tool.js';
 import { ModelRouter } from './services/model-router.js';
+import { Planner } from './services/planner.js';
 import { TaskManager } from './services/task-manager.js';
 import { TaskScheduler } from './services/task-scheduler.js';
 import { ToolExecutor, type ApproveOptions, type ToolCallOptions } from './services/tool-executor.js';
@@ -77,6 +86,8 @@ export interface JarvisCoreOptions {
   enableSkillServers?: boolean;
   /** Test seam: connect to a skill server without spawning a process. */
   mcpConnect?: McpConnect;
+  /** Test seam: a catalog of skills that need no real package. */
+  skillCatalog?: readonly SkillCatalogEntry[];
 }
 
 export interface ToolDescriptor {
@@ -115,8 +126,11 @@ export class JarvisCore {
   private readonly browserBridge = new PlaywrightBrowserBridge();
   private readonly mcpStore: McpStore;
   private readonly mcp: McpManager;
+  private readonly skills: SkillInstaller;
   private readonly workflowStore: WorkflowStore;
   private readonly workflows: WorkflowRunner;
+  private readonly router: ModelRouter;
+  private readonly planner: Planner;
   private readonly startedAt = Date.now();
 
   constructor(options: JarvisCoreOptions = {}) {
@@ -162,6 +176,8 @@ export class JarvisCore {
     });
     this.registry.register(createKnowledgeSearchTool(this.knowledge));
     const router = new ModelRouter(this.runtime, () => this.settingsStore.getAll().defaultModel);
+    this.router = router;
+    this.planner = new Planner({ runtime: this.runtime, registry: this.registry });
 
     // Qwen Code is opt-in: when it cannot be reached, the stub keeps the same
     // interface and routes chat through the model runtime instead.
@@ -219,6 +235,16 @@ export class JarvisCore {
     // delays startup, so a broken server shows as disconnected instead of hanging Core.
     if (options.enableSkillServers !== false) {
       void this.mcp.start();
+    }
+    this.skills = new SkillInstaller({ manager: this.mcp, catalog: options.skillCatalog });
+    // Finding and adding a skill are ordinary tools, so Jarvis can extend itself mid-task
+    // and the spawn still passes the permission gate and the audit trail.
+    for (const tool of createSkillTools({
+      entries: () => this.skills.entries(),
+      find: (need) => this.skills.find(need),
+      install: (skillId) => this.installSkill(skillId),
+    })) {
+      this.registry.register(tool);
     }
 
     this.workflowStore = new WorkflowStore(this.db);
@@ -422,6 +448,64 @@ export class JarvisCore {
     return this.workflows.runNow(id, input);
   }
 
+  // ---------------------------------------------------------------- planning
+
+  /**
+   * Works out what to do about something the user asked for, without doing any of it
+   * yet. The steps come back for review; nothing has touched the machine at this point.
+   */
+  async planGoal(goal: string, model?: string): Promise<Plan> {
+    const route = await this.router.route({ requested: model, mode: 'agent' });
+    return await this.planner.plan(goal, route.model);
+  }
+
+  /**
+   * Runs a plan. It is saved as a workflow first, so the run has somewhere to keep its
+   * trail and the user can open, edit or re-run the same steps afterwards. Every step
+   * still goes through the permission gate, so planning grants no extra power.
+   */
+  runPlan(plan: Plan): PlanRunStart {
+    // The plan may have been edited on its way back here, so it is trusted no further
+    // than a hand-written workflow: `create` validates every step before anything runs.
+    const goal = plan.goal.trim().slice(0, PLAN_LIMITS.maxGoalChars);
+    if (!goal) throw new Error('Tell Jarvis what you want done.');
+    if (plan.steps.length > PLAN_LIMITS.maxSteps) {
+      throw new Error(`A plan runs at most ${PLAN_LIMITS.maxSteps} steps.`);
+    }
+    // Only make room up front when there is none left at all: an old plan should not be
+    // dropped for a run that turns out never to start.
+    if (this.workflowStore.count() >= WORKFLOW_LIMITS.maxWorkflows) {
+      this.workflowStore.prunePlans(PLAN_LIMITS.maxKept - 1);
+    }
+    const workflow = this.workflowStore.create(
+      {
+        name: plan.summary.trim().slice(0, 120) || goal.slice(0, 120),
+        description: goal,
+        steps: plan.steps,
+        model: plan.model,
+      },
+      { source: 'planner', goal },
+    );
+    let run: WorkflowRun;
+    try {
+      run = this.workflows.runNow(workflow.id, goal);
+    } catch (error) {
+      // The run never started, so the recipe Jarvis saved for it is junk: keeping it would
+      // leave the user deleting plans that did nothing.
+      this.workflowStore.delete(workflow.id);
+      throw error;
+    }
+    this.bus.emit('workflow.changed', workflow);
+    // This plan ran, so it earns its place and the oldest plan beyond the limit gives way.
+    this.workflowStore.prunePlans(PLAN_LIMITS.maxKept);
+    return { plan, workflowId: workflow.id, run };
+  }
+
+  /** Plan and act in one go: what the user gets from typing a sentence and pressing go. */
+  async doGoal(goal: string, model?: string): Promise<PlanRunStart> {
+    return this.runPlan(await this.planGoal(goal, model));
+  }
+
   cancelWorkflowRun(runId: string): WorkflowRun {
     return this.workflows.cancelRun(runId);
   }
@@ -496,6 +580,41 @@ export class JarvisCore {
 
   async reconnectSkillServer(id: string): Promise<McpServer> {
     return await this.mcp.reconnect(id);
+  }
+
+  // ---------------------------------------------------------------- skill catalog
+
+  findSkills(need: string): SkillMatch[] {
+    return this.skills.find(need);
+  }
+
+  /**
+   * Adds a curated skill. Reached either from the Skills page or from the `skills.install`
+   * tool, which is where the approval for a first spawn comes from; both are audited, since
+   * the skill's own process runs outside the tool sandbox.
+   */
+  async installSkill(skillId: string): Promise<InstalledSkill> {
+    const entry = this.skills.entries().find((candidate) => candidate.id === skillId);
+    this.auditSkillServerChange(
+      'install-skill',
+      entry?.name ?? skillId,
+      `Adding catalog skill ${skillId}: ${entry ? `${entry.command} ${entry.args.join(' ')}`.trim() : 'unknown definition'}.`,
+      4,
+    );
+    try {
+      const installed = await this.skills.install(skillId);
+      this.auditSkillServerChange(
+        'install-skill',
+        installed.name,
+        `Catalog skill ${installed.name} is running with ${String(installed.toolIds.length)} tool(s).`,
+        3,
+      );
+      return installed;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.auditSkillServerChange('install-skill', entry?.name ?? skillId, `Catalog skill was not added: ${message}`, 1);
+      throw error;
+    }
   }
 
   async deleteSkillServer(id: string): Promise<void> {

@@ -18,6 +18,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import type {
+  Plan,
   Workflow,
   WorkflowInput,
   WorkflowRunStatus,
@@ -28,7 +29,7 @@ import { TASK_LIMITS, WORKFLOW_LIMITS } from '@jarvis/types';
 import { StatusBadge, jarvisSpacing } from '@jarvis/ui';
 import type { StatusTone } from '@jarvis/ui';
 import { PageHeader } from '../components/PageHeader.js';
-import { useTools, useWorkflowActions, useWorkflowRuns, useWorkflows } from '../queries.js';
+import { usePlanActions, useTools, useWorkflowActions, useWorkflowRuns, useWorkflows } from '../queries.js';
 
 const useStyles = makeStyles({
   section: { display: 'flex', flexDirection: 'column', gap: jarvisSpacing.s, marginBottom: jarvisSpacing.l },
@@ -72,6 +73,9 @@ export function WorkflowsPage() {
   const runs = useWorkflowRuns();
   const tools = useTools();
   const actions = useWorkflowActions();
+  const planning = usePlanActions();
+  const [goal, setGoal] = useState('');
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [draft, setDraft] = useState<WorkflowInput>(EMPTY_DRAFT);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [runInput, setRunInput] = useState<Record<string, string>>({});
@@ -90,7 +94,9 @@ export function WorkflowsPage() {
 
   const error =
     jsonError ??
-    (actions.create.error ??
+    (planning.propose.error ??
+      planning.run.error ??
+      actions.create.error ??
       actions.update.error ??
       actions.runNow.error ??
       actions.cancelRun.error ??
@@ -144,6 +150,14 @@ export function WorkflowsPage() {
     actions.create.mutate(draft, { onSuccess: reset });
   };
 
+  /** Move a proposed plan into the builder, so its steps can be corrected before saving. */
+  const editPlan = (proposed: Plan) => {
+    setEditingId(null);
+    setJsonEdits({});
+    setDraft({ name: proposed.summary, description: proposed.goal, steps: proposed.steps, model: proposed.model });
+    setPlan(null);
+  };
+
   const edit = (workflow: Workflow) => {
     setEditingId(workflow.id);
     setJsonEdits({});
@@ -168,7 +182,7 @@ export function WorkflowsPage() {
     <>
       <PageHeader
         title="Workflows"
-        description="Build a recipe out of tool and prompt steps. Jarvis runs the steps in order, and every tool step goes through the same permission checks as chat."
+        description="Say what you want and Jarvis works out the steps itself; the builder below is there to correct or reuse them. Either way every tool step goes through the same permission checks as chat."
       />
 
       {error ? (
@@ -176,6 +190,73 @@ export function WorkflowsPage() {
           <MessageBarBody>{typeof error === 'string' ? error : (error as Error).message}</MessageBarBody>
         </MessageBar>
       ) : null}
+
+      <Card className={styles.form}>
+        <CardHeader header={<Subtitle2>Ask Jarvis to do something</Subtitle2>} />
+        <div className={styles.field}>
+          <Label htmlFor="plan-goal">What do you want done?</Label>
+          <Textarea
+            id="plan-goal"
+            value={goal}
+            placeholder="Tidy my Downloads folder and tell me what you moved"
+            onChange={(_, data) => setGoal(data.value)}
+          />
+          <Caption1 className={styles.meta}>
+            Jarvis works out the steps itself. Nothing runs until you press Run, and each step still asks for
+            permission the way chat does.
+          </Caption1>
+        </div>
+        {plan ? (
+          <div className={styles.step}>
+            <Body1>{plan.summary}</Body1>
+            {plan.steps.map((step, index) => (
+              <Caption1 key={index} className={styles.mono}>
+                {`${String(index + 1)}. ${step.title} — ${
+                  step.kind === 'tool' ? `${step.toolId ?? ''} ${JSON.stringify(step.input ?? {})}` : (step.prompt ?? '')
+                }`}
+              </Caption1>
+            ))}
+            {plan.notes.map((note, index) => (
+              <Caption1 key={index} className={styles.meta}>
+                {note}
+              </Caption1>
+            ))}
+          </div>
+        ) : null}
+        <div className={styles.actions}>
+          <Button
+            appearance={plan ? 'secondary' : 'primary'}
+            disabled={goal.trim() === '' || planning.propose.isPending}
+            onClick={() =>
+              planning.propose.mutate(goal, { onSuccess: (proposed) => setPlan(proposed) })
+            }
+          >
+            {planning.propose.isPending ? 'Working out how…' : plan ? 'Plan again' : 'Plan it'}
+          </Button>
+          {plan ? (
+            <>
+              <Button
+                appearance="primary"
+                disabled={planning.run.isPending}
+                onClick={() =>
+                  planning.run.mutate(plan, {
+                    onSuccess: () => {
+                      setPlan(null);
+                      setGoal('');
+                    },
+                  })
+                }
+              >
+                Run it
+              </Button>
+              <Button onClick={() => editPlan(plan)}>Edit the steps</Button>
+              <Button appearance="subtle" onClick={() => setPlan(null)}>
+                Discard
+              </Button>
+            </>
+          ) : null}
+        </div>
+      </Card>
 
       <Card className={styles.form}>
         <CardHeader header={<Subtitle2>{editingId ? 'Edit workflow' : 'New workflow'}</Subtitle2>} />
@@ -356,6 +437,7 @@ export function WorkflowsPage() {
                     tone={workflow.running ? 'info' : workflow.enabled ? 'ok' : 'neutral'}
                     label={workflowState(workflow)}
                   />
+                  {workflow.source === 'planner' ? <StatusBadge tone="neutral" label="planned by Jarvis" /> : null}
                   <Switch
                     checked={workflow.enabled}
                     label="Enabled"
