@@ -124,20 +124,26 @@ jobs:
         shell: pwsh
         run: pnpm --filter @jarvis/desktop tauri build --bundles nsis
 
-      - name: Locate installer
+      - name: Verify installer and write checksum
         shell: pwsh
         run: |
           $files = @(Get-ChildItem 'apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe')
           if ($files.Count -ne 1) {
             throw "Expected exactly one NSIS installer, found $($files.Count)"
           }
-          Write-Host "Built $($files[0].FullName)"
+          $installer = $files[0]
+          $hash = Get-FileHash $installer.FullName -Algorithm SHA256
+          "$($hash.Hash)  $($installer.Name)" | Set-Content -Path "$($installer.FullName).sha256" -Encoding ascii
+          Write-Host "Built $($installer.FullName)"
+          Write-Host "SHA256 $($hash.Hash)"
 
       - name: Upload Jarvis installer
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-Windows-x64-Setup
-          path: apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
